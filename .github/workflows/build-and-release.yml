@@ -121,6 +121,9 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download Windows release asset
         uses: actions/download-artifact@v4
         with:
@@ -145,9 +148,43 @@ jobs:
           cd dist
           sha256sum * > SHA256SUMS.txt
 
+      - name: Generate automatic changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs')
+            const tagName = context.ref.replace('refs/tags/', '')
+            const { data } = await github.rest.repos.generateReleaseNotes({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+            })
+            fs.writeFileSync('generated-release-notes.md', data.body || '', 'utf8')
+
+      - name: Build release notes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          default_template = Path(".github/release-notes/default.md")
+          template = default_template.read_text(encoding="utf-8")
+          auto_notes = Path("generated-release-notes.md").read_text(encoding="utf-8").strip()
+          if not auto_notes:
+            auto_notes = "- No generated changelog available."
+
+          release_notes = (
+            template
+            .replace("{{VERSION}}", "${{ github.ref_name }}")
+            .replace("{{AUTO_NOTES}}", auto_notes)
+          )
+          Path("release-notes.md").write_text(release_notes.rstrip() + "\n", encoding="utf-8")
+          PY
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          name: CPA Control Center ${{ github.ref_name }}
+          body_path: release-notes.md
           files: |
             dist/*
