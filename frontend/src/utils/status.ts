@@ -1,7 +1,7 @@
 import { i18n } from '@/i18n'
 import type { AccountRecord, AccountStateKey } from '@/types'
 
-export const stateOrder: AccountStateKey[] = ['normal', 'invalid_401', 'quota_limited', 'recovered', 'error']
+export const stateOrder: AccountStateKey[] = ['pending', 'normal', 'invalid_401', 'quota_limited', 'recovered', 'error']
 
 export function normalizeStateKey(state: string | null | undefined): AccountStateKey {
   const value = String(state ?? '').trim().toLowerCase()

@@ -6,11 +6,12 @@ import {
   type TitleComponentOption,
   type TooltipComponentOption,
 } from 'echarts/components'
-import { init, use, type ComposeOption, type ECharts } from 'echarts/core'
+import { getInstanceByDom, init, use, type ComposeOption, type ECharts } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { DashboardSummary } from '@/types'
+import { emitDebug, emitDebugError } from '@/utils/debug'
 
 use([PieChart, TitleComponent, TooltipComponent, CanvasRenderer])
 
@@ -39,8 +40,10 @@ const shellWidth = ref(0)
 const shellHeight = ref(0)
 let chart: ECharts | null = null
 let resizeObserver: ResizeObserver | null = null
+let renderFrame = 0
 
 const items = computed<DonutItem[]>(() => [
+  { key: 'pending', value: props.summary.pendingCount, name: t('states.pending'), color: '#7c9eb2' },
   { key: 'normal', value: props.summary.normalCount, name: t('states.normal'), color: '#2f7d61' },
   { key: 'invalid_401', value: props.summary.invalid401Count, name: t('states.invalid_401'), color: '#c2410c' },
   { key: 'quota_limited', value: props.summary.quotaLimitedCount, name: t('states.quota_limited'), color: '#d97706' },
@@ -125,100 +128,126 @@ function updateBounds() {
 
 function renderChart() {
   if (!chartRoot.value) {
+    emitDebug('summary-donut', 'render skipped: no chart root')
+    return
+  }
+  if (chartRoot.value.clientWidth <= 0 || chartRoot.value.clientHeight <= 0) {
+    emitDebug('summary-donut', 'render skipped: zero-size container', {
+      width: chartRoot.value.clientWidth,
+      height: chartRoot.value.clientHeight,
+    })
     return
   }
 
-  if (!chart) {
-    chart = init(chartRoot.value)
-  } else {
-    chart.resize()
+  try {
+    if (!chart) {
+      chart = getInstanceByDom(chartRoot.value) ?? init(chartRoot.value)
+    } else {
+      chart.resize()
+    }
+
+    const metrics = chartMetrics(chartRoot.value.clientWidth, chartRoot.value.clientHeight)
+    const seriesData = items.value.length > 0
+      ? items.value.map(({ color, name, value }) => ({
+          value,
+          name,
+          itemStyle: { color },
+        }))
+      : [{ value: 1, name: t('common.notAvailable'), itemStyle: { color: '#d6d0c0' } }]
+
+    chart.setOption<DonutChartOption>({
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'item',
+      },
+      title: [
+        {
+          text: `${props.summary.filteredAccounts || 0}`,
+          left: 'center',
+          top: metrics.titleTop,
+          textStyle: {
+            color: '#201b14',
+            fontSize: metrics.titleSize,
+            fontWeight: 800,
+            lineHeight: metrics.titleSize + 4,
+          },
+        },
+        {
+          text: t('dashboard.trackedAccounts'),
+          left: 'center',
+          top: metrics.subTitleTop,
+          textStyle: {
+            color: '#7a705f',
+            fontSize: metrics.subTitleSize,
+            fontWeight: 700,
+          },
+        },
+      ],
+      series: [
+        {
+          type: 'pie',
+          radius: metrics.radius,
+          center: metrics.center,
+          silent: false,
+          label: {
+            show: false,
+          },
+          labelLine: {
+            show: false,
+          },
+          itemStyle: {
+            borderColor: '#f5efe2',
+            borderWidth: metrics.borderWidth,
+          },
+          emphasis: {
+            scale: true,
+            scaleSize: metrics.emphasisScale,
+          },
+          data: seriesData,
+        },
+      ],
+    })
+    emitDebug('summary-donut', 'rendered', {
+      width: chartRoot.value.clientWidth,
+      height: chartRoot.value.clientHeight,
+      items: items.value.map((item) => ({ key: item.key, value: item.value })),
+      filtered: props.summary.filteredAccounts,
+    })
+  } catch (error) {
+    emitDebugError('summary-donut', 'render failed', error)
+    console.error('SummaryDonut render failed', error)
   }
+}
 
-  const metrics = chartMetrics(chartRoot.value.clientWidth, chartRoot.value.clientHeight)
-  const seriesData = items.value.length > 0
-    ? items.value.map(({ color, name, value }) => ({
-        value,
-        name,
-        itemStyle: { color },
-      }))
-    : [{ value: 1, name: t('common.notAvailable'), itemStyle: { color: '#d6d0c0' } }]
-
-  chart.setOption<DonutChartOption>({
-    backgroundColor: 'transparent',
-    tooltip: {
-      trigger: 'item',
-    },
-    title: [
-      {
-        text: `${props.summary.filteredAccounts || 0}`,
-        left: 'center',
-        top: metrics.titleTop,
-        textStyle: {
-          color: '#201b14',
-          fontSize: metrics.titleSize,
-          fontWeight: 800,
-          lineHeight: metrics.titleSize + 4,
-        },
-      },
-      {
-        text: t('dashboard.trackedAccounts'),
-        left: 'center',
-        top: metrics.subTitleTop,
-        textStyle: {
-          color: '#7a705f',
-          fontSize: metrics.subTitleSize,
-          fontWeight: 700,
-        },
-      },
-    ],
-    series: [
-      {
-        type: 'pie',
-        radius: metrics.radius,
-        center: metrics.center,
-        silent: false,
-        label: {
-          show: false,
-        },
-        labelLine: {
-          show: false,
-        },
-        itemStyle: {
-          borderColor: '#f5efe2',
-          borderWidth: metrics.borderWidth,
-        },
-        emphasis: {
-          scale: true,
-          scaleSize: metrics.emphasisScale,
-        },
-        data: seriesData,
-      },
-    ],
+function queueRender() {
+  if (renderFrame) {
+    window.cancelAnimationFrame(renderFrame)
+  }
+  renderFrame = window.requestAnimationFrame(() => {
+    renderFrame = 0
+    renderChart()
   })
 }
 
 function handleResize() {
   updateBounds()
-  window.requestAnimationFrame(() => {
-    renderChart()
-  })
+  queueRender()
 }
 
 watch([items, () => props.summary.filteredAccounts], async () => {
   await nextTick()
-  renderChart()
+  queueRender()
 }, { deep: true })
 
 onMounted(() => {
+  emitDebug('summary-donut', 'mounted')
   updateBounds()
-  renderChart()
+  queueRender()
   window.addEventListener('resize', handleResize)
   if (shell.value || chartRoot.value) {
     resizeObserver = new ResizeObserver(() => {
       updateBounds()
-      window.requestAnimationFrame(() => {
-        renderChart()
-      })
+      queueRender()
     })
     if (shell.value) {
       resizeObserver.observe(shell.value)
@@ -229,10 +258,28 @@ onMounted(() => {
   }
 })
 
+onActivated(() => {
+  emitDebug('summary-donut', 'activated')
+  handleResize()
+})
+
+onDeactivated(() => {
+  emitDebug('summary-donut', 'deactivated')
+  if (renderFrame) {
+    window.cancelAnimationFrame(renderFrame)
+    renderFrame = 0
+  }
+})
+
 onBeforeUnmount(() => {
+  emitDebug('summary-donut', 'before unmount')
   window.removeEventListener('resize', handleResize)
   resizeObserver?.disconnect()
   resizeObserver = null
+  if (renderFrame) {
+    window.cancelAnimationFrame(renderFrame)
+    renderFrame = 0
+  }
   chart?.dispose()
   chart = null
 })

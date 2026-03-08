@@ -1057,6 +1057,118 @@ select {
   width: 140px;
 }
 
+.debug-panel {
+  position: fixed;
+  top: 88px;
+  right: 18px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 108px);
+  padding: 1rem;
+  border-radius: 24px;
+  background: rgba(26, 31, 27, 0.94);
+  color: #f8f4ea;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 28px 60px rgba(15, 17, 14, 0.28);
+  backdrop-filter: blur(14px);
+}
+
+.debug-panel__header,
+.debug-panel__entry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.debug-panel__header p,
+.debug-panel__entry p,
+.debug-panel__entry pre {
+  margin: 0;
+}
+
+.debug-panel__header p {
+  color: rgba(248, 244, 234, 0.58);
+  font-size: 0.82rem;
+}
+
+.debug-panel__actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.debug-panel__summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.debug-panel__summary > div {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.65rem 0.72rem;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.debug-panel__summary strong {
+  font-size: 0.72rem;
+  color: rgba(248, 244, 234, 0.62);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.debug-panel__summary span {
+  font-weight: 700;
+}
+
+.debug-panel__logs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  overflow: auto;
+  min-height: 0;
+}
+
+.debug-panel__entry {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem 0.8rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.debug-panel__entry[data-level="error"] {
+  border-color: rgba(230, 115, 71, 0.35);
+  background: rgba(230, 115, 71, 0.08);
+}
+
+.debug-panel__entry-head span {
+  color: rgba(248, 244, 234, 0.54);
+  font-size: 0.76rem;
+}
+
+.debug-panel__entry p {
+  color: #f8f4ea;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.debug-panel__entry pre {
+  overflow: auto;
+  padding: 0.55rem 0.6rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  color: rgba(248, 244, 234, 0.82);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .view-shell--dashboard {
   grid-template-rows: var(--dashboard-hero-height) var(--dashboard-stats-height) minmax(var(--dashboard-bottom-min), 1fr);
   gap: 1rem;

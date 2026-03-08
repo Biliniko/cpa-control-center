@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, watch, ref } from 'vue'
 import {
   ElButton,
   ElDrawer,
@@ -17,7 +17,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 import { formatDateTime } from '@/utils/format'
 import { toErrorMessage } from '@/utils/errors'
-import { normalizeStateKey, quotaActionLabel, taskStatusLabel } from '@/utils/status'
+import { quotaActionLabel, taskStatusLabel } from '@/utils/status'
+import { emitDebug, emitDebugError } from '@/utils/debug'
 
 const { t } = useI18n()
 const accountsStore = useAccountsStore()
@@ -48,20 +49,48 @@ const scanDetailStatusState = computed(() => {
   }
 })
 
-const invalidPreview = computed(() => accountsStore.accounts.filter((item) => normalizeStateKey(item.stateKey || item.state) === 'invalid_401').slice(0, 4))
-const quotaPreview = computed(() => accountsStore.accounts.filter((item) => normalizeStateKey(item.stateKey || item.state) === 'quota_limited').slice(0, 4))
-
 const historyRows = computed(() => accountsStore.history.map((item) => ({
   ...item,
   statusLabel: taskStatusLabel(item.status),
   finishedAtLabel: formatDateTime(item.finishedAt),
 })))
 
+onMounted(() => {
+  emitDebug('dashboard', 'mounted', {
+    filtered: accountsStore.summary.filteredAccounts,
+    pending: accountsStore.summary.pendingCount,
+    history: historyRows.value.length,
+  })
+})
+
+onUnmounted(() => {
+  emitDebug('dashboard', 'unmounted')
+})
+
+watch(
+  () => [
+    accountsStore.summary.filteredAccounts,
+    accountsStore.summary.pendingCount,
+    accountsStore.summary.lastScanAt,
+    historyRows.value.length,
+  ],
+  ([filtered, pending, lastScanAt, historyCount]) => {
+    emitDebug('dashboard', 'summary changed', {
+      filtered,
+      pending,
+      lastScanAt,
+      historyCount,
+    })
+  },
+  { immediate: true },
+)
+
 async function runScan() {
   try {
     await tasksStore.runScan()
     ElMessage.success(t('dashboard.scanCompleted'))
   } catch (error) {
+    emitDebugError('dashboard', 'runScan failed', error)
     ElMessage.error(toErrorMessage(error))
   }
 }
@@ -72,9 +101,6 @@ async function runMaintain() {
     t('dashboard.maintainDialog.delete401', { count: settings.delete401 ? accountsStore.summary.invalid401Count : 0 }),
     t('dashboard.maintainDialog.quotaAction', { action: quotaActionLabel(settings.quotaAction) }),
     t('dashboard.maintainDialog.autoReenable', { count: settings.autoReenable ? accountsStore.summary.recoveredCount : 0 }),
-    '',
-    t('dashboard.maintainDialog.invalidSample', { names: invalidPreview.value.map((item) => item.name).join(', ') || t('common.none') }),
-    t('dashboard.maintainDialog.quotaSample', { names: quotaPreview.value.map((item) => item.name).join(', ') || t('common.none') }),
   ]
 
   try {
@@ -92,6 +118,7 @@ async function runMaintain() {
     ElMessage.success(t('dashboard.maintainCompleted'))
   } catch (error) {
     if (String(error) !== 'cancel') {
+      emitDebugError('dashboard', 'runMaintain failed', error)
       ElMessage.error(toErrorMessage(error))
     }
   }
@@ -104,6 +131,12 @@ async function loadScanDetailPage(page = detailPage.value, pageSize = detailPage
   detailLoading.value = true
   try {
     const detail = await accountsStore.loadScanDetail(detailRunId.value, page, pageSize)
+    emitDebug('dashboard', 'scan detail page loaded', {
+      runId: detailRunId.value,
+      page: detail.page,
+      pageSize: detail.pageSize,
+      total: detail.totalRecords,
+    })
     detailPage.value = detail.page
     detailPageSize.value = detail.pageSize
   } finally {
@@ -118,6 +151,7 @@ async function openHistory(runId: number) {
     await loadScanDetailPage(1, detailPageSize.value)
     drawerOpen.value = true
   } catch (error) {
+    emitDebugError('dashboard', 'openHistory failed', error)
     ElMessage.error(toErrorMessage(error))
   }
 }

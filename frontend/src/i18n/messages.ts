@@ -27,6 +27,7 @@ export const messages = {
       chinese: '中文',
     },
     common: {
+      loading: 'Loading',
       idle: 'Idle',
       none: 'none',
       allProviders: 'all providers',
@@ -256,6 +257,7 @@ export const messages = {
       chinese: '中文',
     },
     common: {
+      loading: '正在加载',
       idle: '空闲',
       none: '无',
       allProviders: '全部提供方',
@@ -263,7 +265,7 @@ export const messages = {
       unknown: '未知',
       yes: '是',
       no: '否',
-      notAvailable: '无',
+      notAvailable: '暂无',
       optional: '可选',
     },
     states: {
