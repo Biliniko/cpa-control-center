@@ -165,17 +165,32 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import re
           from pathlib import Path
 
           default_template = Path(".github/release-notes/default.md")
           template = default_template.read_text(encoding="utf-8")
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
           auto_notes = Path("generated-release-notes.md").read_text(encoding="utf-8").strip()
+          tag = "${{ github.ref_name }}"
+
+          curated_notes = ""
+          match = re.search(
+              rf"^##\s+{re.escape(tag)}\s*$\n(.*?)(?=^##\s+|\Z)",
+              changelog,
+              re.MULTILINE | re.DOTALL,
+          )
+          if match:
+              curated_notes = match.group(1).strip()
           if not auto_notes:
             auto_notes = "- No generated changelog available."
+          if not curated_notes:
+            curated_notes = "- No curated changelog entry found in `CHANGELOG.md` for this version."
 
           release_notes = (
             template
-            .replace("{{VERSION}}", "${{ github.ref_name }}")
+            .replace("{{VERSION}}", tag)
+            .replace("{{CURATED_NOTES}}", curated_notes)
             .replace("{{AUTO_NOTES}}", auto_notes)
           )
           Path("release-notes.md").write_text(release_notes.rstrip() + "\n", encoding="utf-8")

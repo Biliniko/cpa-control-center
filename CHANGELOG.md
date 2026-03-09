@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## v1.2.0
+
 ### Highlights
 
 - Added an in-app scheduler that can trigger recurring `Scan` or `Maintain` runs while the desktop app is open.
