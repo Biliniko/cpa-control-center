@@ -263,8 +263,9 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 	}
 
 	timestamp := nowISO()
-	candidates := make([]AccountRecord, 0, len(files))
-	candidateIndexes := make([]int, 0, len(files))
+	probeCandidates := make([]AccountRecord, 0, len(files))
+	probeCandidateIndexes := make([]int, 0, len(files))
+	recordIndexes := make(map[string]int, len(files))
 	records = make([]AccountRecord, 0, len(files))
 
 	for _, item := range files {
@@ -279,28 +280,42 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 		}
 		record := b.client.BuildAccountRecord(item, previous, timestamp)
 		record = carryInventorySnapshot(record, previous)
-		if matchesInventoryFilter(record, settings) {
-			candidateIndexes = append(candidateIndexes, len(records))
-			candidates = append(candidates, record)
+		if index, ok := recordIndexes[name]; ok {
+			records[index] = record
+			continue
 		}
+		recordIndexes[name] = len(records)
 		records = append(records, record)
 	}
 
-	summary.TotalAccounts = len(records)
-	summary.FilteredAccounts = len(candidates)
-	b.emitLog(kind, "info", msg(settings.Locale, "task.scan.prepared_candidates", len(candidates), len(records)))
+	filteredAccounts := 0
+	for index, record := range records {
+		if !matchesInventoryFilter(record, settings) {
+			continue
+		}
+		filteredAccounts++
+		if !shouldProbeCandidate(record, settings) {
+			continue
+		}
+		probeCandidateIndexes = append(probeCandidateIndexes, index)
+		probeCandidates = append(probeCandidates, record)
+	}
 
-	selectedCandidates := candidates
-	selectedIndexes := candidateIndexes
-	if useIncrementalScan(kind, settings) && len(candidates) > settings.ScanBatchSize {
-		selected := selectIncrementalCandidateIndexes(candidates, settings.ScanBatchSize)
+	summary.TotalAccounts = len(records)
+	summary.FilteredAccounts = filteredAccounts
+	b.emitLog(kind, "info", msg(settings.Locale, "task.scan.prepared_candidates", len(probeCandidates), len(records)))
+
+	selectedCandidates := probeCandidates
+	selectedIndexes := probeCandidateIndexes
+	if useIncrementalScan(kind, settings) && len(probeCandidates) > settings.ScanBatchSize {
+		selected := selectIncrementalCandidateIndexes(probeCandidates, settings.ScanBatchSize)
 		selectedCandidates = make([]AccountRecord, 0, len(selected))
 		selectedIndexes = make([]int, 0, len(selected))
 		for _, idx := range selected {
-			selectedCandidates = append(selectedCandidates, candidates[idx])
-			selectedIndexes = append(selectedIndexes, candidateIndexes[idx])
+			selectedCandidates = append(selectedCandidates, probeCandidates[idx])
+			selectedIndexes = append(selectedIndexes, probeCandidateIndexes[idx])
 		}
-		b.emitLog(kind, "info", msg(settings.Locale, "task.scan.incremental_selected", len(selectedCandidates), len(candidates), settings.ScanBatchSize))
+		b.emitLog(kind, "info", msg(settings.Locale, "task.scan.incremental_selected", len(selectedCandidates), len(probeCandidates), settings.ScanBatchSize))
 	}
 
 	probed, err := b.probeAccounts(ctx, kind, settings, selectedCandidates)
@@ -335,8 +350,8 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 	dashboard := computeSummary(filtered)
 	summary.Status = "success"
 	summary.ProbedAccounts = len(selectedCandidates)
-	if len(selectedCandidates) < len(candidates) {
-		summary.Message = msg(settings.Locale, "task.scan.completed_partial", len(selectedCandidates), len(candidates))
+	if len(selectedCandidates) < len(probeCandidates) {
+		summary.Message = msg(settings.Locale, "task.scan.completed_partial", len(selectedCandidates), len(probeCandidates))
 	} else {
 		summary.Message = msg(settings.Locale, "task.scan.completed", len(filtered))
 	}

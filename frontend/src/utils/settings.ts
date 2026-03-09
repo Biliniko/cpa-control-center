@@ -15,6 +15,7 @@ export function createDefaultSettings(): AppSettings {
     provider: '',
     scanStrategy: 'full',
     scanBatchSize: 1000,
+    skipKnown401: true,
     probeWorkers: 40,
     actionWorkers: 20,
     timeoutSeconds: 15,

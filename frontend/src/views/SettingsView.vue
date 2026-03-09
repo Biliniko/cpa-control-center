@@ -23,6 +23,7 @@ const settingsStore = useSettingsStore()
 const accountsStore = useAccountsStore()
 const timezoneLabel = Intl.DateTimeFormat().resolvedOptions().timeZone || t('settings.scheduleTimezoneLocal')
 const isChinese = computed(() => settingsStore.currentLocale === 'zh-CN')
+const skipKnown401Label = computed(() => (isChinese.value ? '扫描时跳过已知 401' : 'Skip known 401 during scan'))
 
 const infoAriaLabel = computed(() => (isChinese.value ? '更多信息' : 'More information'))
 
@@ -52,8 +53,11 @@ const infoCopy = computed<Record<string, string>>(() => (
       }
 ))
 
-function infoText(key: keyof typeof infoCopy.value) {
-  return infoCopy.value[key]
+function infoText(key: string) {
+  if (key in infoCopy.value) {
+    return infoCopy.value[key]
+  }
+  return ''
 }
 
 const connectionCopy = computed(() => {
@@ -277,6 +281,7 @@ async function changeLocale(locale: string) {
         <p class="muted">{{ t('settings.scanBatchHint') }}</p>
 
         <div class="settings-toggles">
+          <el-switch v-model="settingsStore.settings.skipKnown401" :active-text="t('settings.skipKnown401')" />
           <el-switch v-model="settingsStore.settings.delete401" :active-text="t('settings.delete401')" />
           <el-switch v-model="settingsStore.settings.autoReenable" :active-text="t('settings.autoReenable')" />
           <el-switch v-model="settingsStore.settings.detailedLogs" :active-text="t('settings.detailedLogs')" />

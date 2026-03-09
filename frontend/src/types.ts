@@ -20,6 +20,7 @@ export interface AppSettings {
   provider: string
   scanStrategy: ScanStrategy
   scanBatchSize: number
+  skipKnown401: boolean
   probeWorkers: number
   actionWorkers: number
   timeoutSeconds: number

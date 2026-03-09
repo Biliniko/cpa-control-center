@@ -9,6 +9,7 @@ type AppSettings struct {
 	Provider        string           `json:"provider"`
 	ScanStrategy    string           `json:"scanStrategy"`
 	ScanBatchSize   int              `json:"scanBatchSize"`
+	SkipKnown401    bool             `json:"skipKnown401"`
 	ProbeWorkers    int              `json:"probeWorkers"`
 	ActionWorkers   int              `json:"actionWorkers"`
 	TimeoutSeconds  int              `json:"timeoutSeconds"`

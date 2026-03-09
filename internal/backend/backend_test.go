@@ -18,6 +18,7 @@ type fakeCPAServer struct {
 	reenabled []string
 	fetches   int
 	apiCalls  int
+	apiAuths  []string
 }
 
 func (f *fakeCPAServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +35,7 @@ func (f *fakeCPAServer) handler(w http.ResponseWriter, r *http.Request) {
 			AuthIndex string `json:"authIndex"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.apiAuths = append(f.apiAuths, body.AuthIndex)
 		switch body.AuthIndex {
 		case "invalid":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 401, "body": ""})
@@ -546,6 +548,363 @@ func TestIncrementalScanOnlyProbesSelectedBatch(t *testing.T) {
 	serverState.mu.Unlock()
 	if secondAPICalls != 4 {
 		t.Fatalf("expected total 4 probe calls after two incremental scans, got %d", secondAPICalls)
+	}
+}
+
+func TestRunScanDeduplicatesNamesAndSkipsKnownInvalid401(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "known-invalid.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "invalid",
+				"id_token":   `{"chatgpt_account_id":"acct-invalid","plan_type":"pro"}`,
+			},
+			{
+				"name":       "duplicate.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "dup",
+				"id_token":   `{"chatgpt_account_id":"acct-dup","plan_type":"pro"}`,
+			},
+			{
+				"name":       "duplicate.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "dup",
+				"id_token":   `{"chatgpt_account_id":"acct-dup","plan_type":"pro"}`,
+			},
+			{
+				"name":       "fresh.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "healthy",
+				"id_token":   `{"chatgpt_account_id":"acct-fresh","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		SkipKnown401:    true,
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if err := service.store.UpsertCurrentAccount(AccountRecord{
+		Name:             "known-invalid.json",
+		AuthIndex:        "invalid",
+		Type:             "codex",
+		Provider:         "codex",
+		State:            stateInvalid401,
+		StateKey:         stateInvalid401,
+		Status:           stateInvalid401,
+		StatusMessage:    "known invalid",
+		ChatGPTAccountID: "acct-invalid",
+		LastSeenAt:       nowISO(),
+		LastProbedAt:     nowISO(),
+		UpdatedAt:        nowISO(),
+	}); err != nil {
+		t.Fatalf("UpsertCurrentAccount: %v", err)
+	}
+
+	summary, err := service.RunScan()
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if summary.FilteredAccounts != 3 || summary.ProbedAccounts != 2 {
+		t.Fatalf("unexpected full scan summary: %+v", summary)
+	}
+
+	snapshot, err := service.GetDashboardSnapshot()
+	if err != nil {
+		t.Fatalf("GetDashboardSnapshot: %v", err)
+	}
+	if snapshot.Summary.FilteredAccounts != 3 || snapshot.Summary.Invalid401Count != 1 || snapshot.Summary.NormalCount != 2 {
+		t.Fatalf("unexpected snapshot after deduplicated scan: %+v", snapshot.Summary)
+	}
+
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.apiCalls != 2 {
+		t.Fatalf("expected 2 probe calls after dedupe and 401 skip, got %d", serverState.apiCalls)
+	}
+	dupCalls := 0
+	invalidCalls := 0
+	for _, auth := range serverState.apiAuths {
+		switch auth {
+		case "dup":
+			dupCalls++
+		case "invalid":
+			invalidCalls++
+		}
+	}
+	if dupCalls != 1 {
+		t.Fatalf("expected duplicate auth to be probed once, got %d calls (%v)", dupCalls, serverState.apiAuths)
+	}
+	if invalidCalls != 0 {
+		t.Fatalf("expected known invalid auth to be skipped, got %d calls (%v)", invalidCalls, serverState.apiAuths)
+	}
+}
+
+func TestRunScanReprobesKnownInvalid401WhenInventoryChanges(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "known-invalid.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "healthy",
+				"updated_at": "2026-03-09T10:30:00Z",
+				"id_token":   `{"chatgpt_account_id":"acct-replaced","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		SkipKnown401:    true,
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if err := service.store.UpsertCurrentAccount(AccountRecord{
+		Name:             "known-invalid.json",
+		AuthIndex:        "invalid",
+		Type:             "codex",
+		Provider:         "codex",
+		State:            stateInvalid401,
+		StateKey:         stateInvalid401,
+		Status:           stateInvalid401,
+		StatusMessage:    "known invalid",
+		ChatGPTAccountID: "acct-invalid",
+		AuthUpdatedAt:    "2026-03-09T09:00:00Z",
+		LastSeenAt:       nowISO(),
+		LastProbedAt:     nowISO(),
+		UpdatedAt:        nowISO(),
+	}); err != nil {
+		t.Fatalf("UpsertCurrentAccount: %v", err)
+	}
+
+	summary, err := service.RunScan()
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if summary.FilteredAccounts != 1 || summary.ProbedAccounts != 1 || summary.NormalCount != 1 {
+		t.Fatalf("unexpected scan summary after inventory change: %+v", summary)
+	}
+
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.apiCalls != 1 {
+		t.Fatalf("expected inventory change to force a reprobe, got %d calls", serverState.apiCalls)
+	}
+	if len(serverState.apiAuths) != 1 || serverState.apiAuths[0] != "healthy" {
+		t.Fatalf("expected reprobe against the refreshed auth index, got %v", serverState.apiAuths)
+	}
+}
+
+func TestIncrementalScanSkipsKnownInvalid401(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "known-invalid.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "invalid",
+				"id_token":   `{"chatgpt_account_id":"acct-invalid","plan_type":"pro"}`,
+			},
+			{
+				"name":       "pending.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "healthy",
+				"id_token":   `{"chatgpt_account_id":"acct-pending","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ScanStrategy:    "incremental",
+		ScanBatchSize:   10,
+		SkipKnown401:    true,
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if err := service.store.UpsertCurrentAccount(AccountRecord{
+		Name:             "known-invalid.json",
+		AuthIndex:        "invalid",
+		Type:             "codex",
+		Provider:         "codex",
+		State:            stateInvalid401,
+		StateKey:         stateInvalid401,
+		Status:           stateInvalid401,
+		StatusMessage:    "known invalid",
+		ChatGPTAccountID: "acct-invalid",
+		LastSeenAt:       nowISO(),
+		LastProbedAt:     nowISO(),
+		UpdatedAt:        nowISO(),
+	}); err != nil {
+		t.Fatalf("UpsertCurrentAccount: %v", err)
+	}
+
+	summary, err := service.RunScan()
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if summary.FilteredAccounts != 2 || summary.ProbedAccounts != 1 {
+		t.Fatalf("unexpected incremental scan summary: %+v", summary)
+	}
+
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if serverState.apiCalls != 1 {
+		t.Fatalf("expected 1 probe call during incremental scan, got %d", serverState.apiCalls)
+	}
+	for _, auth := range serverState.apiAuths {
+		if auth == "invalid" {
+			t.Fatalf("expected known invalid auth to be skipped in incremental scan, got calls %v", serverState.apiAuths)
+		}
+	}
+}
+
+func TestRunScanCanProbeKnownInvalid401WhenSkipDisabled(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "known-invalid.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "invalid",
+				"id_token":   `{"chatgpt_account_id":"acct-invalid","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ScanStrategy:    "full",
+		SkipKnown401:    false,
+		ProbeWorkers:    4,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	existing := AccountRecord{
+		Name:             "known-invalid.json",
+		Type:             "codex",
+		Provider:         "codex",
+		AuthIndex:        "invalid",
+		ChatGPTAccountID: "acct-invalid",
+		State:            stateInvalid401,
+		StateKey:         stateInvalid401,
+		LastProbedAt:     nowISO(),
+		UpdatedAt:        nowISO(),
+	}
+	if err := service.store.UpsertCurrentAccount(existing); err != nil {
+		t.Fatalf("UpsertCurrentAccount: %v", err)
+	}
+
+	if _, err := service.RunScan(); err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+
+	invalidCalls := 0
+	for _, auth := range serverState.apiAuths {
+		if auth == "invalid" {
+			invalidCalls++
+		}
+	}
+	if invalidCalls != 1 {
+		t.Fatalf("expected known invalid auth to be probed when skipKnown401 is disabled, got %d calls (%v)", invalidCalls, serverState.apiAuths)
 	}
 }
 

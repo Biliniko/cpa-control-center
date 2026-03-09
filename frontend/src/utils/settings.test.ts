@@ -7,6 +7,7 @@ describe('validateSettings', () => {
     expect(settings.detailedLogs).toBe(false)
     expect(settings.scanStrategy).toBe('full')
     expect(settings.scanBatchSize).toBe(1000)
+    expect(settings.skipKnown401).toBe(true)
     settings.baseUrl = 'https://example.com'
     settings.managementToken = 'token'
 

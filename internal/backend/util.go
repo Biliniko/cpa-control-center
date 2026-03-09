@@ -32,6 +32,7 @@ func defaultSettings(exportDir string) AppSettings {
 		TargetType:      defaultTargetType,
 		ScanStrategy:    defaultScanStrategy,
 		ScanBatchSize:   defaultScanBatchSize,
+		SkipKnown401:    true,
 		ProbeWorkers:    defaultProbeWorkers,
 		ActionWorkers:   defaultActionWorkers,
 		TimeoutSeconds:  defaultTimeout,
@@ -74,6 +75,7 @@ func normalizeSettings(input AppSettings, exportDir string) AppSettings {
 	if input.ScanBatchSize > 0 {
 		settings.ScanBatchSize = input.ScanBatchSize
 	}
+	settings.SkipKnown401 = input.SkipKnown401
 	if input.ProbeWorkers > 0 {
 		settings.ProbeWorkers = input.ProbeWorkers
 	}
@@ -250,6 +252,73 @@ func useIncrementalScan(kind string, settings AppSettings) bool {
 	return kind == "scan" && normalizeScanStrategy(settings.ScanStrategy) == "incremental" && settings.ScanBatchSize > 0
 }
 
+func shouldProbeCandidate(record AccountRecord, settings AppSettings) bool {
+	if settings.SkipKnown401 && normalizeStateKey(record.StateKey) == stateInvalid401 {
+		return false
+	}
+	return true
+}
+
+func inventoryFingerprintChanged(record AccountRecord, previous AccountRecord) bool {
+	if record.AuthIndex != previous.AuthIndex {
+		return true
+	}
+	if record.ChatGPTAccountID != previous.ChatGPTAccountID {
+		return true
+	}
+	if record.Email != previous.Email {
+		return true
+	}
+	if record.Provider != previous.Provider {
+		return true
+	}
+	if record.Type != previous.Type {
+		return true
+	}
+	if record.Account != previous.Account {
+		return true
+	}
+	if record.Source != previous.Source {
+		return true
+	}
+	if record.Disabled != previous.Disabled {
+		return true
+	}
+	if record.Unavailable != previous.Unavailable {
+		return true
+	}
+	if record.RuntimeOnly != previous.RuntimeOnly {
+		return true
+	}
+	if record.AuthUpdatedAt != previous.AuthUpdatedAt {
+		return true
+	}
+	if record.AuthModTime != previous.AuthModTime {
+		return true
+	}
+	if record.AuthLastRefresh != previous.AuthLastRefresh {
+		return true
+	}
+	return false
+}
+
+func markPending(record AccountRecord) AccountRecord {
+	record.State = statePending
+	record.StateKey = statePending
+	record.LastProbedAt = ""
+	record.APIHTTPStatus = nil
+	record.APIStatusCode = nil
+	record.ProbeErrorKind = ""
+	record.ProbeErrorText = ""
+	record.Allowed = nil
+	record.LimitReached = nil
+	record.Invalid401 = false
+	record.QuotaLimited = false
+	record.Recovered = false
+	record.Error = false
+	return sanitizeRecord(record)
+}
+
 func selectIncrementalCandidateIndexes(candidates []AccountRecord, batchSize int) []int {
 	if batchSize <= 0 || len(candidates) <= batchSize {
 		indexes := make([]int, len(candidates))
@@ -417,14 +486,13 @@ func carryProbeSnapshot(record AccountRecord, previous AccountRecord) AccountRec
 
 func carryInventorySnapshot(record AccountRecord, previous *AccountRecord) AccountRecord {
 	if previous == nil {
-		record.State = statePending
-		record.StateKey = statePending
-		return sanitizeRecord(record)
+		return markPending(record)
 	}
 	if previous.LastProbedAt != "" {
+		if inventoryFingerprintChanged(record, *previous) {
+			return markPending(record)
+		}
 		return carryProbeSnapshot(record, *previous)
 	}
-	record.State = statePending
-	record.StateKey = statePending
-	return sanitizeRecord(record)
+	return markPending(record)
 }

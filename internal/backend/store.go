@@ -170,9 +170,17 @@ func (s *Store) LoadSettings() (AppSettings, error) {
 		return defaults, err
 	}
 
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return defaults, err
+	}
+
 	var raw AppSettings
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return defaults, err
+	}
+	if _, ok := keys["skipKnown401"]; !ok {
+		raw.SkipKnown401 = defaults.SkipKnown401
 	}
 
 	return normalizeSettings(raw, s.exportsDir), nil

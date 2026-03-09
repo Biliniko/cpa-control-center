@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"os"
 	"testing"
 )
 
@@ -208,5 +209,46 @@ func TestSaveScanRecordsHandlesDuplicateNamesWithinRun(t *testing.T) {
 	}
 	if detail.Records[0].StatusMessage != "latest" {
 		t.Fatalf("expected latest record payload to win, got %+v", detail.Records[0])
+	}
+}
+
+func TestLoadSettingsDefaultsSkipKnown401WhenMissingFromLegacyFile(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	legacy := `{
+  "baseUrl": "https://example.com",
+  "managementToken": "token",
+  "locale": "en-US",
+  "detailedLogs": false,
+  "targetType": "codex",
+  "provider": "",
+  "scanStrategy": "full",
+  "scanBatchSize": 1000,
+  "probeWorkers": 40,
+  "actionWorkers": 20,
+  "timeoutSeconds": 15,
+  "retries": 3,
+  "userAgent": "ua",
+  "quotaAction": "disable",
+  "delete401": true,
+  "autoReenable": true,
+  "exportDirectory": ""
+}`
+	if err := os.WriteFile(store.settingsPath, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("WriteFile settings.json: %v", err)
+	}
+
+	settings, err := store.LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if !settings.SkipKnown401 {
+		t.Fatalf("expected legacy settings to default skipKnown401 to true")
 	}
 }
