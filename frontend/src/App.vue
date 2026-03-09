@@ -198,6 +198,7 @@ onMounted(async () => {
   try {
     WindowSetLightTheme()
     await settingsStore.loadSettings()
+    settingsStore.initSchedulerBridge()
     emitDebug('app', 'settings loaded', {
       locale: settingsStore.currentLocale,
       baseUrl: settingsStore.settings.baseUrl,
@@ -242,6 +243,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   tasksStore.destroyEventBridge()
+  settingsStore.destroySchedulerBridge()
   setDebugEnabled(false)
   unbindDebugListeners()
   window.removeEventListener('keydown', onDebugHotkey)

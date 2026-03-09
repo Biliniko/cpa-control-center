@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 import { CancelScan, RunMaintain, RunScan } from '../../wailsjs/go/main/App'
 import { i18n } from '@/i18n'
-import type { LogEntry, MaintainOptions, TaskProgress } from '@/types'
+import type { LogEntry, MaintainOptions, TaskFinished, TaskProgress } from '@/types'
 import { toErrorMessage } from '@/utils/errors'
 import { useAccountsStore } from '@/stores/accounts'
 import { taskPhaseLabel } from '@/utils/status'
@@ -84,6 +84,14 @@ export const useTasksStore = defineStore('tasksStore', {
         }
         this.upsertProgressLog('maintain', payload, message)
       })
+      EventsOn('task:finished', (payload: TaskFinished) => {
+        if (payload.kind === 'scan') {
+          this.scan.active = false
+        } else if (payload.kind === 'maintain') {
+          this.maintain.active = false
+        }
+        void useAccountsStore().refreshAll()
+      })
 
       this.initialised = true
     },
@@ -95,6 +103,7 @@ export const useTasksStore = defineStore('tasksStore', {
       EventsOff('maintain:log')
       EventsOff('scan:progress')
       EventsOff('maintain:progress')
+      EventsOff('task:finished')
       this.initialised = false
     },
     pushLog(entry: LogEntry) {
@@ -118,7 +127,6 @@ export const useTasksStore = defineStore('tasksStore', {
       })
     },
     async runScan() {
-      const accountsStore = useAccountsStore()
       const message = i18n.global.t('tasks.queuedScan')
       this.scan = { ...emptyTracker(), active: true, phase: 'queued', message }
       this.upsertProgressLog('scan', { kind: 'scan', phase: 'queued', current: 0, total: 0, message, done: false }, message)
@@ -134,11 +142,9 @@ export const useTasksStore = defineStore('tasksStore', {
         throw error
       } finally {
         this.scan.active = false
-        await accountsStore.refreshAll()
       }
     },
     async runMaintain(options: MaintainOptions) {
-      const accountsStore = useAccountsStore()
       const message = i18n.global.t('tasks.queuedMaintain')
       this.maintain = { ...emptyTracker(), active: true, phase: 'queued', message }
       this.upsertProgressLog('maintain', { kind: 'maintain', phase: 'queued', current: 0, total: 0, message, done: false }, message)
@@ -154,7 +160,6 @@ export const useTasksStore = defineStore('tasksStore', {
         throw error
       } finally {
         this.maintain.active = false
-        await accountsStore.refreshAll()
       }
     },
     async cancelCurrentTask() {
