@@ -13,10 +13,10 @@ var assets embed.FS
 
 const (
 	appTitle         = "CPA Control Center"
-	defaultWidth     = 1760
-	defaultHeight    = 1000
-	defaultMinWidth  = 1460
-	defaultMinHeight = 880
+	preferredWidth   = 1760
+	preferredHeight  = 1000
+	defaultMinWidth  = 720
+	defaultMinHeight = 480
 )
 
 func main() {
@@ -29,10 +29,12 @@ func main() {
 }
 
 func newAppOptions(app *App) *options.App {
+	startupWidth, startupHeight := resolveStartupWindowSize()
+
 	appOptions := &options.App{
 		Title:     appTitle,
-		Width:     defaultWidth,
-		Height:    defaultHeight,
+		Width:     startupWidth,
+		Height:    startupHeight,
 		MinWidth:  defaultMinWidth,
 		MinHeight: defaultMinHeight,
 		AssetServer: &assetserver.Options{

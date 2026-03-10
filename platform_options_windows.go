@@ -3,9 +3,13 @@
 package main
 
 import (
+	"syscall"
+
 	"github.com/wailsapp/wails/v2/pkg/options"
 	windowopts "github.com/wailsapp/wails/v2/pkg/options/windows"
 )
+
+var windowsUser32DLL = syscall.NewLazyDLL("user32.dll")
 
 func applyPlatformOptions(appOptions *options.App) {
 	appOptions.Windows = &windowopts.Options{
