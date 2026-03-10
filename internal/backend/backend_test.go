@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ type fakeCPAServer struct {
 	disabled  []string
 	reenabled []string
 	fetches   int
+	configHits int
 	apiCalls  int
 	apiAuths  []string
 }
@@ -50,11 +52,26 @@ func (e *captureEmitter) logEntries() []capturedEvent {
 	return entries
 }
 
+func (e *captureEmitter) eventsByName(name string) []capturedEvent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	entries := make([]capturedEvent, 0, len(e.events))
+	for _, item := range e.events {
+		if item.event == name {
+			entries = append(entries, item)
+		}
+	}
+	return entries
+}
+
 func (f *fakeCPAServer) handler(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v0/management/config":
+		f.configHits++
+		_ = json.NewEncoder(w).Encode(map[string]any{"authDir": "/tmp/auth"})
 	case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files":
 		f.fetches++
 		_ = json.NewEncoder(w).Encode(map[string]any{"files": f.files})
@@ -112,7 +129,7 @@ func (f *fakeCPAServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func TestBackendTestAndSaveSettingsFetchesInventoryOnce(t *testing.T) {
+func TestBackendTestAndSaveSettingsDoesNotSyncInventory(t *testing.T) {
 	serverState := &fakeCPAServer{
 		files: []map[string]any{
 			{
@@ -153,15 +170,19 @@ func TestBackendTestAndSaveSettingsFetchesInventoryOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TestAndSaveSettings: %v", err)
 	}
-	if !result.OK || result.AccountCount != 1 {
+	if !result.OK || result.AccountCount != 0 {
 		t.Fatalf("unexpected connection result: %+v", result)
 	}
 
 	serverState.mu.Lock()
 	fetches := serverState.fetches
+	configHits := serverState.configHits
 	serverState.mu.Unlock()
-	if fetches != 1 {
-		t.Fatalf("expected exactly one auth-files fetch, got %d", fetches)
+	if configHits != 1 {
+		t.Fatalf("expected exactly one config fetch, got %d", configHits)
+	}
+	if fetches != 0 {
+		t.Fatalf("expected no auth-files fetch during test-and-save, got %d", fetches)
 	}
 
 	savedSettings, err := service.GetSettings()
@@ -176,8 +197,104 @@ func TestBackendTestAndSaveSettingsFetchesInventoryOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetDashboardSnapshot: %v", err)
 	}
-	if snapshot.Summary.FilteredAccounts != 1 || snapshot.Summary.PendingCount != 1 {
+	if snapshot.Summary.FilteredAccounts != 0 || snapshot.Summary.PendingCount != 0 {
 		t.Fatalf("unexpected dashboard snapshot after test-and-save: %+v", snapshot.Summary)
+	}
+}
+
+func TestClientTestConnectionFallsBackToAuthFilesOnLegacyCPA(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/config":
+			http.NotFound(w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"files": []map[string]any{
+					{"name": "legacy.json"},
+					{"name": "legacy-two.json"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	result, err := client.TestConnection(context.Background(), AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+	})
+	if err != nil {
+		t.Fatalf("TestConnection: %v", err)
+	}
+	if !result.OK || result.AccountCount != 2 {
+		t.Fatalf("unexpected connection result: %+v", result)
+	}
+}
+
+func TestSyncInventoryEmitsInventoryTaskEvents(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "inventory-task.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "healthy",
+				"id_token":   `{"chatgpt_account_id":"acct-task","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	emitter := &captureEmitter{}
+	service, err := New(dataDir, emitter)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    4,
+		ActionWorkers:   2,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	result, err := service.SyncInventory()
+	if err != nil {
+		t.Fatalf("SyncInventory: %v", err)
+	}
+	if result.TotalAccounts != 1 || result.FilteredAccounts != 1 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+
+	if len(emitter.eventsByName("inventory:progress")) == 0 {
+		t.Fatal("expected inventory progress events")
+	}
+	finished := emitter.eventsByName("task:finished")
+	if len(finished) == 0 {
+		t.Fatal("expected task finished event")
+	}
+	lastFinished, ok := finished[len(finished)-1].payload.(TaskFinished)
+	if !ok {
+		t.Fatalf("unexpected finished payload type: %T", finished[len(finished)-1].payload)
+	}
+	if lastFinished.Kind != "inventory" || lastFinished.Status != "success" {
+		t.Fatalf("unexpected finished payload: %+v", lastFinished)
 	}
 }
 

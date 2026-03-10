@@ -13,14 +13,14 @@ import {
   ElSwitch,
 } from 'element-plus'
 import { useI18n } from 'vue-i18n'
-import { useAccountsStore } from '@/stores/accounts'
 import { useSettingsStore } from '@/stores/settings'
+import { useTasksStore } from '@/stores/tasks'
 import { formatDateTime } from '@/utils/format'
 import { toErrorMessage } from '@/utils/errors'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
-const accountsStore = useAccountsStore()
+const tasksStore = useTasksStore()
 const timezoneLabel = Intl.DateTimeFormat().resolvedOptions().timeZone || t('settings.scheduleTimezoneLocal')
 const isChinese = computed(() => settingsStore.currentLocale === 'zh-CN')
 const skipKnown401Label = computed(() => (isChinese.value ? '扫描时跳过已知 401' : 'Skip known 401 during scan'))
@@ -30,6 +30,7 @@ const infoAriaLabel = computed(() => (isChinese.value ? '更多信息' : 'More i
 const infoCopy = computed<Record<string, string>>(() => (
   isChinese.value
     ? {
+        targetType: '这里填写的是账号类型过滤条件，不是模型名。常见值如 codex、chatgpt、gemini。若填成 gpt-5.2 这类模型名，账号列表和仪表盘可能会被全部过滤为空。',
         scanStrategy: '全量扫描会在一次任务中探测所有过滤后的账号。增量扫描每次只探测一个批次，更适合大号池分摊压力。',
         scanBatchSize: '仅在增量扫描模式下生效，决定每次扫描实际探测多少个过滤后的账号。',
         probeWorkers: '扫描时允许同时进行的探测请求数。数值越大完成越快，但对 CPA 和上游的压力也越大。',
@@ -41,6 +42,7 @@ const infoCopy = computed<Record<string, string>>(() => (
         scheduleCron: '使用本地时区的标准 5 段 cron：分钟 小时 日 月 星期。示例：0 */6 * * *。',
       }
     : {
+        targetType: 'This field filters account type, not model name. Typical values are codex, chatgpt, or gemini. Entering a model like gpt-5.2 can filter the dashboard and accounts list down to zero.',
         scanStrategy: 'Full scan probes every filtered account in one run. Incremental scan probes only one batch each run to spread load across large pools.',
         scanBatchSize: 'Only used in incremental mode. This sets how many filtered accounts are probed in each scan run.',
         probeWorkers: 'Maximum concurrent probe requests during scanning. Higher values finish faster, but they increase CPA and upstream pressure.',
@@ -63,6 +65,12 @@ function infoText(key: string) {
 const connectionCopy = computed(() => {
   if (!settingsStore.connection) {
     return t('settings.notTestedYet')
+  }
+  if (settingsStore.connection.accountCount <= 0) {
+    return t('settings.connectionSummaryBasic', {
+      message: settingsStore.connection.message,
+      checkedAt: formatDateTime(settingsStore.connection.checkedAt),
+    })
   }
   return t('settings.connectionSummary', {
     message: settingsStore.connection.message,
@@ -88,7 +96,11 @@ const schedulerMessage = computed(() => (
 async function testOnly() {
   try {
     const result = await settingsStore.testConnection()
-    ElMessage.success(t('settings.testReachable', { message: result.message, count: result.accountCount }))
+    ElMessage.success(
+      result.accountCount > 0
+        ? t('settings.testReachable', { message: result.message, count: result.accountCount })
+        : t('settings.testReachableBasic', { message: result.message }),
+    )
   } catch (error) {
     ElMessage.error(toErrorMessage(error))
   }
@@ -97,8 +109,12 @@ async function testOnly() {
 async function testAndSave() {
   try {
     const result = await settingsStore.testAndSave()
-    await accountsStore.refreshAll()
-    ElMessage.success(t('settings.savedReachable', { count: result.accountCount }))
+    tasksStore.scheduleInventorySync()
+    ElMessage.success(
+      result.accountCount > 0
+        ? t('settings.savedReachableSyncing', { count: result.accountCount })
+        : t('settings.savedReachableSyncingBasic'),
+    )
   } catch (error) {
     ElMessage.error(toErrorMessage(error))
   }
@@ -139,6 +155,20 @@ async function changeLocale(locale: string) {
             <el-input v-model="settingsStore.settings.managementToken" type="password" show-password :placeholder="t('settings.tokenPlaceholder')" />
           </el-form-item>
           <el-form-item :label="t('settings.targetType')">
+            <template #label>
+              <span class="form-label-with-info">
+                <span>{{ t('settings.targetType') }}</span>
+                <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
+                  <template #reference>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                  </template>
+                  <div class="settings-info-popover__content">
+                    <strong>{{ t('settings.targetType') }}</strong>
+                    <p>{{ infoText('targetType') }}</p>
+                  </div>
+                </el-popover>
+              </span>
+            </template>
             <el-input v-model="settingsStore.settings.targetType" />
           </el-form-item>
           <el-form-item :label="t('settings.provider')">

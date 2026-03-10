@@ -217,7 +217,7 @@ export interface MaintainResult {
 }
 
 export interface TaskProgress {
-  kind: 'scan' | 'maintain'
+  kind: 'scan' | 'maintain' | 'inventory'
   phase: string
   current: number
   total: number
@@ -226,14 +226,14 @@ export interface TaskProgress {
 }
 
 export interface TaskFinished {
-  kind: 'scan' | 'maintain'
+  kind: 'scan' | 'maintain' | 'inventory'
   status: string
   message: string
 }
 
 export interface LogEntry {
   id?: string
-  kind: 'scan' | 'maintain'
+  kind: 'scan' | 'maintain' | 'inventory'
   level: string
   message: string
   timestamp: string

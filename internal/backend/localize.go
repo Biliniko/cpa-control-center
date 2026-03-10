@@ -257,6 +257,11 @@ func taskName(locale string, taskKind string) string {
 	switch taskKind {
 	case "maintain":
 		return msg(locale, "task.name.maintain")
+	case "inventory":
+		if localeOrDefault(locale) == localeChinese {
+			return "库存同步"
+		}
+		return "Inventory Sync"
 	default:
 		return msg(locale, "task.name.scan")
 	}

@@ -105,21 +105,9 @@ func (b *Backend) SaveSettings(input AppSettings) (AppSettings, error) {
 
 func (b *Backend) TestAndSaveSettings(input AppSettings) (ConnectionResult, error) {
 	settings := normalizeSettings(input, b.store.exportsDir)
-	if err := ensureConfigured(settings); err != nil {
-		return ConnectionResult{
-			OK:        false,
-			Message:   err.Error(),
-			CheckedAt: nowISO(),
-		}, err
-	}
-
-	files, err := b.client.FetchAuthFiles(context.Background(), settings)
+	result, err := b.client.TestConnection(context.Background(), settings)
 	if err != nil {
-		return ConnectionResult{
-			OK:        false,
-			Message:   err.Error(),
-			CheckedAt: nowISO(),
-		}, err
+		return result, err
 	}
 
 	settings, err = b.saveSettings(settings)
@@ -127,16 +115,7 @@ func (b *Backend) TestAndSaveSettings(input AppSettings) (ConnectionResult, erro
 		return ConnectionResult{}, err
 	}
 
-	if _, err := b.syncInventoryFromFiles(settings, files); err != nil {
-		return ConnectionResult{}, err
-	}
-
-	return ConnectionResult{
-		OK:           true,
-		Message:      msg(settings.Locale, "connection.success"),
-		AccountCount: len(files),
-		CheckedAt:    nowISO(),
-	}, nil
+	return result, nil
 }
 
 func (b *Backend) saveSettings(input AppSettings) (AppSettings, error) {
@@ -178,15 +157,51 @@ func (b *Backend) SyncInventory() (InventorySyncResult, error) {
 		return InventorySyncResult{}, err
 	}
 
-	files, err := b.client.FetchAuthFiles(context.Background(), settings)
+	ctx, err := b.beginTask("inventory", settings.Locale)
 	if err != nil {
 		return InventorySyncResult{}, err
 	}
+	defer b.endTask()
 
-	return b.syncInventoryFromFiles(settings, files)
+	b.emitProgress("inventory", "fetch", 0, 1, msg(settings.Locale, "task.scan.loading_inventory"), false)
+	files, err := b.client.FetchAuthFiles(ctx, settings)
+	if err != nil {
+		status := taskStatus(err)
+		b.emitLog("inventory", "error", msg(settings.Locale, "task.scan.failed_auth_files", err))
+		b.emitProgress("inventory", "fetch", 0, 1, err.Error(), true)
+		b.emitTaskFinished("inventory", status, err.Error())
+		return InventorySyncResult{}, err
+	}
+	b.emitProgress("inventory", "fetch", 1, 1, msg(settings.Locale, "task.scan.loaded_auth_files", len(files)), true)
+
+	result, err := b.syncInventoryFromFilesWithProgress(ctx, settings, files, func(current int, total int) {
+		b.emitProgress("inventory", "persist", current, total, "", current >= total && total > 0)
+	})
+	if err != nil {
+		status := taskStatus(err)
+		b.emitLog("inventory", "error", err.Error())
+		b.emitProgress("inventory", "persist", 0, len(files), err.Error(), true)
+		b.emitTaskFinished("inventory", status, err.Error())
+		return InventorySyncResult{}, err
+	}
+
+	message := msg(settings.Locale, "task.inventory.synced", result.FilteredAccounts, result.TotalAccounts)
+	b.emitLog("inventory", "info", message)
+	b.emitProgress("inventory", "complete", result.TotalAccounts, result.TotalAccounts, message, true)
+	b.emitTaskFinished("inventory", "success", message)
+	return result, nil
 }
 
 func (b *Backend) syncInventoryFromFiles(settings AppSettings, files []map[string]any) (InventorySyncResult, error) {
+	return b.syncInventoryFromFilesWithProgress(context.Background(), settings, files, nil)
+}
+
+func (b *Backend) syncInventoryFromFilesWithProgress(
+	ctx context.Context,
+	settings AppSettings,
+	files []map[string]any,
+	progress func(current int, total int),
+) (InventorySyncResult, error) {
 	existing, err := b.store.LoadCurrentMap()
 	if err != nil {
 		return InventorySyncResult{}, err
@@ -196,6 +211,9 @@ func (b *Backend) syncInventoryFromFiles(settings AppSettings, files []map[strin
 	records := make([]AccountRecord, 0, len(files))
 	filteredCount := 0
 	for _, item := range files {
+		if err := ctx.Err(); err != nil {
+			return InventorySyncResult{}, err
+		}
 		name := stringValue(item["name"])
 		if name == "" {
 			continue
@@ -213,7 +231,10 @@ func (b *Backend) syncInventoryFromFiles(settings AppSettings, files []map[strin
 		records = append(records, record)
 	}
 
-	if err := b.store.ReplaceCurrentAccounts(records); err != nil {
+	if progress != nil {
+		progress(0, len(records))
+	}
+	if err := b.store.ReplaceCurrentAccountsWithProgress(records, progress); err != nil {
 		return InventorySyncResult{}, err
 	}
 
@@ -222,7 +243,6 @@ func (b *Backend) syncInventoryFromFiles(settings AppSettings, files []map[strin
 		FilteredAccounts: filteredCount,
 		SyncedAt:         timestamp,
 	}
-	b.emitLog("scan", "info", msg(settings.Locale, "task.inventory.synced", filteredCount, len(records)))
 	return result, nil
 }
 

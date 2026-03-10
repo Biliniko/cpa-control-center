@@ -56,6 +56,7 @@ export const messages = {
       ready: 'Ready',
       queuedScan: 'Starting scan...',
       queuedMaintain: 'Starting maintenance...',
+      queuedInventory: 'Starting inventory sync...',
       phases: {
         idle: 'Idle',
         queued: 'Queued',
@@ -83,11 +84,13 @@ export const messages = {
       empty: 'No task logs yet.',
       scanTask: 'Scan Task',
       maintainTask: 'Maintain Task',
+      inventoryTask: 'Inventory Sync',
       taskStream: 'Task Stream',
       runtimeEvents: 'Runtime events',
       kind: {
         scan: 'Scan',
         maintain: 'Maintain',
+        inventory: 'Inventory',
       },
       level: {
         info: 'Info',
@@ -273,8 +276,12 @@ export const messages = {
       tokenPlaceholder: 'Bearer token',
       providerPlaceholder: 'Optional provider filter',
       testReachable: '{message} ({count} accounts)',
+      testReachableBasic: '{message}',
       savedReachable: 'Saved. {count} accounts reachable.',
+      savedReachableSyncing: 'Saved. {count} accounts reachable. Inventory sync will continue in the background.',
+      savedReachableSyncingBasic: 'Saved. Inventory sync will continue in the background.',
       connectionSummary: '{message} ({count} accounts · {checkedAt})',
+      connectionSummaryBasic: '{message} ({checkedAt})',
     },
     validation: {
       baseUrlRequired: 'Base URL is required.',
@@ -351,6 +358,7 @@ export const messages = {
       ready: '就绪',
       queuedScan: '正在启动扫描...',
       queuedMaintain: '正在启动维护...',
+      queuedInventory: '正在启动库存同步...',
       phases: {
         idle: '空闲',
         queued: '排队中',
@@ -378,11 +386,13 @@ export const messages = {
       empty: '暂时还没有任务日志。',
       scanTask: '扫描任务',
       maintainTask: '维护任务',
+      inventoryTask: '库存同步',
       taskStream: '任务流',
       runtimeEvents: '运行时事件',
       kind: {
         scan: '扫描',
         maintain: '维护',
+        inventory: '库存同步',
       },
       level: {
         info: '信息',
@@ -556,8 +566,12 @@ export const messages = {
       tokenPlaceholder: 'Bearer token',
       providerPlaceholder: '可选的提供方过滤',
       testReachable: '{message}（{count} 个账号）',
+      testReachableBasic: '{message}',
       savedReachable: '已保存。可访问 {count} 个账号。',
+      savedReachableSyncing: '已保存。可访问 {count} 个账号，库存同步将在后台继续执行。',
+      savedReachableSyncingBasic: '已保存，库存同步将在后台继续执行。',
       connectionSummary: '{message}（{count} 个账号 · {checkedAt}）',
+      connectionSummaryBasic: '{message}（{checkedAt}）',
     },
     validation: {
       baseUrlRequired: '必须填写 Base URL。',

@@ -18,6 +18,8 @@ interface TaskTracker {
 interface TasksState {
   scan: TaskTracker
   maintain: TaskTracker
+  inventory: TaskTracker
+  inventoryQueued: boolean
   logs: LogEntry[]
   initialised: boolean
 }
@@ -32,7 +34,7 @@ function emptyTracker(): TaskTracker {
   }
 }
 
-function progressEntryId(kind: 'scan' | 'maintain'): string {
+function progressEntryId(kind: 'scan' | 'maintain' | 'inventory'): string {
   return `${kind}:progress`
 }
 
@@ -48,11 +50,13 @@ export const useTasksStore = defineStore('tasksStore', {
   state: (): TasksState => ({
     scan: emptyTracker(),
     maintain: emptyTracker(),
+    inventory: emptyTracker(),
+    inventoryQueued: false,
     logs: [],
     initialised: false,
   }),
   getters: {
-    hasActiveTask: (state) => state.scan.active || state.maintain.active,
+    hasActiveTask: (state) => state.scan.active || state.maintain.active || state.inventory.active,
   },
   actions: {
     initEventBridge() {
@@ -62,6 +66,7 @@ export const useTasksStore = defineStore('tasksStore', {
 
       EventsOn('scan:log', (entry: LogEntry) => this.pushLog(entry))
       EventsOn('maintain:log', (entry: LogEntry) => this.pushLog(entry))
+      EventsOn('inventory:log', (entry: LogEntry) => this.pushLog(entry))
       EventsOn('scan:progress', (payload: TaskProgress) => {
         const message = progressMessage(payload)
         this.scan = {
@@ -84,13 +89,30 @@ export const useTasksStore = defineStore('tasksStore', {
         }
         this.upsertProgressLog('maintain', payload, message)
       })
+      EventsOn('inventory:progress', (payload: TaskProgress) => {
+        const message = progressMessage(payload)
+        this.inventory = {
+          active: !payload.done,
+          phase: payload.phase,
+          current: payload.current,
+          total: payload.total,
+          message,
+        }
+        this.upsertProgressLog('inventory', payload, message)
+      })
       EventsOn('task:finished', (payload: TaskFinished) => {
         if (payload.kind === 'scan') {
           this.scan.active = false
         } else if (payload.kind === 'maintain') {
           this.maintain.active = false
+        } else if (payload.kind === 'inventory') {
+          this.inventory.active = false
         }
         void useAccountsStore().refreshAll()
+        if (this.inventoryQueued && !this.scan.active && !this.maintain.active && !this.inventory.active) {
+          this.inventoryQueued = false
+          void this.runInventory().catch(() => {})
+        }
       })
 
       this.initialised = true
@@ -101,8 +123,10 @@ export const useTasksStore = defineStore('tasksStore', {
       }
       EventsOff('scan:log')
       EventsOff('maintain:log')
+      EventsOff('inventory:log')
       EventsOff('scan:progress')
       EventsOff('maintain:progress')
+      EventsOff('inventory:progress')
       EventsOff('task:finished')
       this.initialised = false
     },
@@ -116,7 +140,7 @@ export const useTasksStore = defineStore('tasksStore', {
       this.logs.unshift(entry)
       this.logs = this.logs.slice(0, 500)
     },
-    upsertProgressLog(kind: 'scan' | 'maintain', payload: TaskProgress, message: string) {
+    upsertProgressLog(kind: 'scan' | 'maintain' | 'inventory', payload: TaskProgress, message: string) {
       this.pushLog({
         id: progressEntryId(kind),
         kind,
@@ -160,6 +184,34 @@ export const useTasksStore = defineStore('tasksStore', {
         throw error
       } finally {
         this.maintain.active = false
+      }
+    },
+    scheduleInventorySync() {
+      if (this.scan.active || this.maintain.active || this.inventory.active) {
+        this.inventoryQueued = true
+        return 'queued' as const
+      }
+      this.inventoryQueued = false
+      void this.runInventory().catch(() => {})
+      return 'started' as const
+    },
+    async runInventory() {
+      const accountsStore = useAccountsStore()
+      const message = i18n.global.t('tasks.queuedInventory')
+      this.inventory = { ...emptyTracker(), active: true, phase: 'queued', message }
+      this.upsertProgressLog('inventory', { kind: 'inventory', phase: 'queued', current: 0, total: 0, message, done: false }, message)
+      try {
+        return await accountsStore.syncInventory()
+      } catch (error) {
+        this.pushLog({
+          kind: 'inventory',
+          level: 'error',
+          message: toErrorMessage(error),
+          timestamp: new Date().toISOString(),
+        })
+        throw error
+      } finally {
+        this.inventory.active = false
       }
     },
     async cancelCurrentTask() {

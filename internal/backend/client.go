@@ -38,7 +38,7 @@ func NewClient() *Client {
 }
 
 func (c *Client) TestConnection(ctx context.Context, settings AppSettings) (ConnectionResult, error) {
-	files, err := c.FetchAuthFiles(ctx, settings)
+	accountCount, err := c.checkManagementAccess(ctx, settings)
 	if err != nil {
 		return ConnectionResult{
 			OK:        false,
@@ -50,9 +50,25 @@ func (c *Client) TestConnection(ctx context.Context, settings AppSettings) (Conn
 	return ConnectionResult{
 		OK:           true,
 		Message:      msg(settings.Locale, "connection.success"),
-		AccountCount: len(files),
+		AccountCount: accountCount,
 		CheckedAt:    nowISO(),
 	}, nil
+}
+
+func (c *Client) checkManagementAccess(ctx context.Context, settings AppSettings) (int, error) {
+	_, err := c.doRequest(ctx, settings, http.MethodGet, settings.BaseURL+"/v0/management/config", nil)
+	if err == nil {
+		return 0, nil
+	}
+	if !isManagementHTTPStatus(err, http.StatusNotFound) {
+		return 0, err
+	}
+
+	files, fallbackErr := c.FetchAuthFiles(ctx, settings)
+	if fallbackErr != nil {
+		return 0, fallbackErr
+	}
+	return len(files), nil
 }
 
 func (c *Client) FetchAuthFiles(ctx context.Context, settings AppSettings) ([]map[string]any, error) {
@@ -377,6 +393,13 @@ func shouldRetryManagedAccountName(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "invalid name") || strings.Contains(message, "auth file not found")
+}
+
+func isManagementHTTPStatus(err error, statusCode int) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), fmt.Sprintf("http %d", statusCode))
 }
 
 func (c *Client) doRequest(ctx context.Context, settings AppSettings, method string, endpoint string, payload any) (map[string]any, error) {

@@ -292,17 +292,8 @@ onMounted(async () => {
       settingsStore.settings.baseUrl &&
       settingsStore.settings.managementToken
     ) {
-      try {
-        await accountsStore.syncInventory()
-        await accountsStore.refreshAll()
-        emitDebug('app', 'inventory synced during startup', {
-          filtered: accountsStore.summary.filteredAccounts,
-          total: accountsStore.summary.totalAccounts,
-        })
-      } catch (error) {
-        emitDebugError('app', 'inventory sync failed during startup', error)
-        ElMessage.error(toErrorMessage(error))
-      }
+      emitDebug('app', 'inventory sync queued during startup')
+      tasksStore.scheduleInventorySync()
     }
     await refreshShell()
     appReady.value = true

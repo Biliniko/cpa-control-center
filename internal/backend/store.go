@@ -393,6 +393,14 @@ func (s *Store) GetCurrentAccount(name string) (AccountRecord, bool, error) {
 }
 
 func (s *Store) ReplaceCurrentAccounts(records []AccountRecord) error {
+	return s.replaceCurrentAccounts(records, nil)
+}
+
+func (s *Store) ReplaceCurrentAccountsWithProgress(records []AccountRecord, progress func(current int, total int)) error {
+	return s.replaceCurrentAccounts(records, progress)
+}
+
+func (s *Store) replaceCurrentAccounts(records []AccountRecord, progress func(current int, total int)) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -402,9 +410,13 @@ func (s *Store) ReplaceCurrentAccounts(records []AccountRecord) error {
 	if _, err := tx.Exec(`DELETE FROM accounts_current`); err != nil {
 		return err
 	}
-	for _, record := range records {
+	total := len(records)
+	for index, record := range records {
 		if err := upsertCurrentAccountTx(tx, record); err != nil {
 			return err
+		}
+		if progress != nil && ((index+1)%250 == 0 || index+1 == total) {
+			progress(index+1, total)
 		}
 	}
 
