@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## v1.4.0
+
+### Highlights
+
+- Rebuilt the accounts page around a batch-action toolbar with table multi-select, removing the old per-row action column and making probe, enable, disable, and delete workflows faster on large pools.
+- Added codex-specific filters for `Plan` and `Disabled` state, plus refreshed account detail presentation with compact pills, truncation, and dialog-based full-detail viewing.
+- Added backend batch account APIs for probe, enable, disable, and delete, and now record those account management actions into the task log stream with batch summaries and per-account failures.
+- Hardened managed account actions so path-like CPA auth names such as `codex/...json` are normalized correctly for delete and toggle requests while preserving compatibility with the official CPA interfaces.
+- Changed Settings `Test Connection` and `Test & Save` to avoid blocking on a full inventory rebuild in the foreground, then continue inventory sync as a background task with visible progress and log output.
+- Added a clear info hint on `Target Type` to explain that it filters account type rather than model name, helping prevent users from accidentally hiding their entire pool with values like `gpt-5.2`.
+
+### Notes
+
+- Batch account actions currently apply to the selected rows on the current page only; cross-page bulk selection is still intentionally unsupported.
+- The logs view now includes inventory-sync task status so long-running refreshes on pools with tens of thousands of accounts are visible instead of looking frozen.
+- On newer CPA builds, connection testing now uses a lightweight management endpoint first and only falls back to fetching `auth-files` when the older endpoint shape requires it.
+- Inventory refresh after saving settings is now queued behind active scan or maintenance work instead of surfacing a misleading warning when another task is already running.
+
 ## v1.3.0
 
 ### Highlights
