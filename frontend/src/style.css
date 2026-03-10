@@ -825,10 +825,59 @@ select {
   padding-inline: 0.9rem;
 }
 
+.accounts-bulkbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  justify-items: start;
+  gap: 0.72rem;
+  margin-bottom: 0.9rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 20px;
+  background: rgba(244, 239, 230, 0.92);
+  border: 1px solid rgba(38, 34, 27, 0.08);
+}
+
+.accounts-bulkbar__meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+
+.accounts-bulkbar__label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0.12rem 0;
+  color: rgba(60, 52, 41, 0.76);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.accounts-bulkbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
+  width: 100%;
+  gap: 0.65rem;
+}
+
+.accounts-bulkbar__actions .el-button {
+  min-height: 38px;
+  padding-inline: 0.9rem;
+}
+
 .row-actions {
   display: flex;
   gap: 0.4rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .row-actions .el-button {
@@ -1307,6 +1356,284 @@ select {
   --el-table-border-color: rgba(38, 34, 27, 0.08);
 }
 
+.accounts-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-row-hover-bg-color: rgba(214, 235, 224, 0.22);
+  --el-table-header-bg-color: rgba(236, 227, 211, 0.75);
+  --el-table-border-color: rgba(38, 34, 27, 0.08);
+}
+
+.accounts-table .el-table__header-wrapper th.el-table__cell {
+  padding: 0.78rem 0;
+}
+
+.accounts-table .el-table__body td.el-table__cell {
+  padding: 0.82rem 0;
+}
+
+.accounts-table .el-table__header-wrapper th.el-table-column--selection > .cell,
+.accounts-table .el-table__body td.el-table-column--selection > .cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.accounts-table .el-checkbox {
+  --el-checkbox-input-width: 18px;
+  --el-checkbox-input-height: 18px;
+  --el-checkbox-border-radius: 5px;
+  --el-checkbox-border-color: rgba(106, 136, 119, 0.32);
+  --el-checkbox-input-border-color-hover: rgba(43, 125, 88, 0.48);
+  --el-checkbox-checked-bg-color: #309867;
+  --el-checkbox-checked-input-border-color: #309867;
+  --el-checkbox-checked-icon-color: #f7f3eb;
+  --el-checkbox-bg-color: rgba(248, 244, 236, 0.98);
+  --el-checkbox-disabled-border-color: rgba(106, 136, 119, 0.18);
+  --el-checkbox-disabled-input-fill: rgba(229, 222, 209, 0.72);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.accounts-table .el-checkbox__inner {
+  width: 18px;
+  height: 18px;
+  border-width: 1px;
+  border-color: rgba(95, 124, 109, 0.34);
+  background: linear-gradient(180deg, rgba(252, 249, 242, 0.98), rgba(240, 233, 223, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 6px 16px rgba(33, 71, 53, 0.07);
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.accounts-table .el-checkbox__inner::after {
+  left: 5px;
+  top: 1px;
+  width: 4px;
+  height: 9px;
+  border-width: 0 2px 2px 0;
+}
+
+.accounts-table .el-checkbox__input:hover .el-checkbox__inner,
+.accounts-table .el-checkbox__input.is-focus .el-checkbox__inner {
+  border-color: rgba(43, 125, 88, 0.46);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    0 8px 18px rgba(43, 125, 88, 0.1);
+}
+
+.accounts-table .el-checkbox__input.is-checked .el-checkbox__inner,
+.accounts-table .el-checkbox__input.is-indeterminate .el-checkbox__inner {
+  background: linear-gradient(180deg, #35a273, #2a875d);
+  border-color: #2a875d;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 9px 20px rgba(43, 125, 88, 0.14);
+}
+
+.accounts-table .el-checkbox__input.is-checked .el-checkbox__inner::after {
+  display: none;
+}
+
+.accounts-table .el-checkbox__input.is-indeterminate .el-checkbox__inner::before {
+  display: block;
+  top: 7px;
+  left: 3px;
+  right: 3px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(247, 243, 235, 0.94);
+}
+
+.accounts-table .el-table-fixed-column--right,
+.accounts-table .el-table__fixed-right,
+.accounts-table .el-table__fixed-right-patch {
+  background: rgba(247, 243, 235, 0.98);
+}
+
+.accounts-table .el-table__fixed-right::before {
+  background: rgba(38, 34, 27, 0.08);
+}
+
+.accounts-table .el-table__fixed-right th.el-table__cell,
+.accounts-table .el-table__fixed-right td.el-table__cell {
+  background: rgba(247, 243, 235, 0.98);
+}
+
+.account-detail-trigger {
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(77, 71, 60, 0.82);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+
+.account-detail-trigger:hover,
+.account-detail-trigger:focus-visible {
+  color: rgba(31, 97, 73, 0.96);
+}
+
+.account-detail-trigger:focus-visible {
+  outline: 2px solid rgba(43, 125, 88, 0.24);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+.account-detail-trigger__text {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0.18rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.account-pill--success {
+  color: #f6fbf8;
+  background: linear-gradient(180deg, #42af7f, #2f8e65);
+  border-color: rgba(39, 122, 86, 0.82);
+}
+
+.account-pill--danger {
+  color: #fff6f4;
+  background: linear-gradient(180deg, #da7f72, #c55e57);
+  border-color: rgba(181, 78, 70, 0.82);
+}
+
+.account-pill--plan-free {
+  color: rgba(82, 67, 48, 0.9);
+  background: linear-gradient(180deg, rgba(233, 223, 203, 0.96), rgba(220, 208, 186, 0.94));
+  border-color: rgba(182, 165, 134, 0.76);
+}
+
+.account-pill--plan-team {
+  color: #f3faf7;
+  background: linear-gradient(180deg, #4a9d89, #377e6f);
+  border-color: rgba(50, 109, 98, 0.84);
+}
+
+.account-pill--plan-pro {
+  color: #fff9ef;
+  background: linear-gradient(180deg, #c99a43, #ae7d2d);
+  border-color: rgba(150, 106, 34, 0.84);
+}
+
+.account-pill--plan-plus {
+  color: #f8f5ff;
+  background: linear-gradient(180deg, #8c86bf, #6f6aa6);
+  border-color: rgba(94, 90, 149, 0.82);
+}
+
+.account-pill--plan-enterprise {
+  color: #f4fbf8;
+  background: linear-gradient(180deg, #2d6359, #234e47);
+  border-color: rgba(30, 69, 63, 0.84);
+}
+
+.account-pill--plan-generic {
+  color: rgba(73, 64, 53, 0.88);
+  background: linear-gradient(180deg, rgba(240, 235, 226, 0.96), rgba(226, 218, 205, 0.94));
+  border-color: rgba(190, 177, 156, 0.74);
+}
+
+.account-detail-dialog .el-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  border-radius: 28px;
+  padding: 0.4rem;
+  background:
+    radial-gradient(circle at top right, rgba(24, 95, 74, 0.08), transparent 22%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(248, 243, 234, 0.985));
+  border: 1px solid rgba(38, 34, 27, 0.08);
+  box-shadow: 0 28px 56px rgba(21, 23, 18, 0.18);
+}
+
+.account-detail-dialog .el-dialog__header {
+  padding: 1rem 1rem 0.35rem;
+  margin-right: 0;
+}
+
+.account-detail-dialog .el-dialog__title {
+  color: var(--ink);
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+
+.account-detail-dialog .el-dialog__headerbtn {
+  top: 18px;
+  right: 18px;
+}
+
+.account-detail-dialog .el-dialog__body {
+  padding: 0.35rem 1rem 1rem;
+}
+
+.account-detail-dialog__header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.9rem;
+}
+
+.account-detail-dialog__eyebrow {
+  color: rgba(60, 52, 41, 0.58);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.account-detail-dialog__name {
+  color: var(--ink);
+  font-size: 1rem;
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.account-detail-dialog__body {
+  border-radius: 22px;
+  background: rgba(244, 239, 230, 0.84);
+  border: 1px solid rgba(38, 34, 27, 0.08);
+  padding: 1rem 1.05rem;
+}
+
+.account-detail-dialog__content {
+  margin: 0;
+  color: rgba(66, 59, 49, 0.84);
+  font-family: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.88rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 /* Window-driven shell reset */
 .app-viewport {
   display: block;
@@ -1710,16 +2037,44 @@ select {
   gap: 0.55rem;
 }
 
+.app-shell--compact .accounts-bulkbar {
+  align-items: stretch;
+  padding: 0.78rem 0.82rem;
+}
+
+.app-shell--compact .account-detail-dialog .el-dialog {
+  width: min(680px, calc(100vw - 20px));
+  max-width: calc(100vw - 20px);
+}
+
+.app-shell--compact .account-detail-dialog .el-dialog__body {
+  padding: 0.3rem 0.86rem 0.86rem;
+}
+
+.app-shell--compact .account-detail-dialog__body {
+  padding: 0.88rem 0.9rem;
+  border-radius: 18px;
+}
+
+.app-shell--compact .accounts-bulkbar__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  justify-content: flex-start;
+}
+
 .app-shell--compact .toolbar-group--compact {
   justify-content: flex-start;
 }
 
 .app-shell--compact .toolbar-group--compact .el-button,
+.app-shell--compact .accounts-bulkbar__actions .el-button,
 .app-shell--compact .row-actions .el-button {
   padding-inline: 0.62rem;
 }
 
-.app-shell--compact .view-shell--accounts .toolbar-group--compact .el-button {
+.app-shell--compact .view-shell--accounts .toolbar-group--compact .el-button,
+.app-shell--compact .accounts-bulkbar__actions .el-button {
   width: 100%;
 }
 

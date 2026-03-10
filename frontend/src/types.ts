@@ -65,6 +65,8 @@ export interface AccountFilter {
   state: string
   provider: string
   type: string
+  planType: string
+  disabled?: boolean
 }
 
 export interface AccountRecord {
@@ -130,6 +132,7 @@ export interface AccountPage {
   page: number
   pageSize: number
   providerOptions: string[]
+  planOptions: string[]
 }
 
 export interface InventorySyncResult {
@@ -151,6 +154,16 @@ export interface ActionResult {
   disabled?: boolean | null
   statusCode?: number | null
   error: string
+}
+
+export interface BulkAccountActionResult {
+  action: string
+  requested: number
+  processed: number
+  succeeded: number
+  failed: number
+  skipped: number
+  results: ActionResult[]
 }
 
 export interface ExportResult {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 )
@@ -265,8 +266,9 @@ func shouldRetryProbeResult(record AccountRecord) bool {
 }
 
 func (c *Client) DeleteAccount(ctx context.Context, settings AppSettings, name string) ActionResult {
-	escapedName := url.QueryEscape(name)
-	_, err := c.doRequest(ctx, settings, http.MethodDelete, settings.BaseURL+"/v0/management/auth-files?name="+escapedName, nil)
+	_, err := c.doManagedAccountRequest(ctx, settings, http.MethodDelete, settings.BaseURL+"/v0/management/auth-files", name, true, false, func(candidate string) any {
+		return nil
+	})
 	if err != nil {
 		return ActionResult{
 			Name:   name,
@@ -279,16 +281,12 @@ func (c *Client) DeleteAccount(ctx context.Context, settings AppSettings, name s
 }
 
 func (c *Client) SetAccountDisabled(ctx context.Context, settings AppSettings, name string, disabled bool) ActionResult {
-	body, err := c.doRequest(
-		ctx,
-		settings,
-		http.MethodPatch,
-		settings.BaseURL+"/v0/management/auth-files/status",
-		map[string]any{
-			"name":     name,
+	body, err := c.doManagedAccountRequest(ctx, settings, http.MethodPatch, settings.BaseURL+"/v0/management/auth-files/status", name, false, true, func(candidate string) any {
+		return map[string]any{
+			"name":     candidate,
 			"disabled": disabled,
-		},
-	)
+		}
+	})
 	if err != nil {
 		result := ActionResult{
 			Name:     name,
@@ -309,6 +307,76 @@ func (c *Client) SetAccountDisabled(ctx context.Context, settings AppSettings, n
 		result.Error = normalizeText(stringValue(body["error"]), 200)
 	}
 	return result
+}
+
+func (c *Client) doManagedAccountRequest(
+	ctx context.Context,
+	settings AppSettings,
+	method string,
+	endpoint string,
+	name string,
+	preferNormalized bool,
+	retryAlternateName bool,
+	payloadForName func(string) any,
+) (map[string]any, error) {
+	candidates := managedAccountNameCandidates(name, preferNormalized, retryAlternateName)
+	var lastErr error
+	for index, candidate := range candidates {
+		requestEndpoint := endpoint
+		if method == http.MethodDelete {
+			requestEndpoint = endpoint + "?name=" + url.QueryEscape(candidate)
+		}
+		response, err := c.doRequest(ctx, settings, method, requestEndpoint, payloadForName(candidate))
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if index == len(candidates)-1 || !shouldRetryManagedAccountName(err) {
+			return nil, err
+		}
+	}
+	return nil, lastErr
+}
+
+func normalizeManagedAccountName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	normalizedPath := strings.ReplaceAll(trimmed, "\\", "/")
+	if base := path.Base(normalizedPath); base != "." && base != "/" && base != "" {
+		return base
+	}
+	return trimmed
+}
+
+func managedAccountNameCandidates(name string, preferNormalized bool, retryAlternateName bool) []string {
+	original := strings.TrimSpace(name)
+	normalized := normalizeManagedAccountName(name)
+	if original == "" {
+		return []string{normalized}
+	}
+	if normalized == "" || normalized == original {
+		return []string{original}
+	}
+	if !retryAlternateName {
+		if preferNormalized {
+			return []string{normalized}
+		}
+		return []string{original}
+	}
+	if preferNormalized {
+		return []string{normalized, original}
+	}
+	return []string{original, normalized}
+}
+
+func shouldRetryManagedAccountName(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "invalid name") || strings.Contains(message, "auth file not found")
 }
 
 func (c *Client) doRequest(ctx context.Context, settings AppSettings, method string, endpoint string, payload any) (map[string]any, error) {

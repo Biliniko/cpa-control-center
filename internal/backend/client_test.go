@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -78,6 +79,101 @@ func TestClientFetchProbeAndActions(t *testing.T) {
 	deleted := client.DeleteAccount(context.Background(), settings, record.Name)
 	if !deleted.OK {
 		t.Fatalf("DeleteAccount failed: %+v", deleted)
+	}
+}
+
+func TestClientNormalizesManagedAccountNameForActions(t *testing.T) {
+	t.Parallel()
+
+	var patchedNames []string
+	var deletedNames []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/v0/management/auth-files/status":
+			var body struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			patchedNames = append(patchedNames, body.Name)
+			if !strings.Contains(body.Name, "/") {
+				http.Error(w, `{"error":"auth file not found"}`, http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		case r.Method == http.MethodDelete && r.URL.Path == "/v0/management/auth-files":
+			deletedName := r.URL.Query().Get("name")
+			deletedNames = append(deletedNames, deletedName)
+			if strings.Contains(deletedName, "/") {
+				http.Error(w, `{"error":"invalid name"}`, http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TimeoutSeconds:  5,
+	}
+
+	name := "codex/token_oc11f94baa80_dollicons.com_1773142291.json"
+	action := client.SetAccountDisabled(context.Background(), settings, name, true)
+	if !action.OK {
+		t.Fatalf("SetAccountDisabled failed: %+v", action)
+	}
+	if len(patchedNames) != 1 || patchedNames[0] != "codex/token_oc11f94baa80_dollicons.com_1773142291.json" {
+		t.Fatalf("expected original patch name, got %v", patchedNames)
+	}
+
+	deleted := client.DeleteAccount(context.Background(), settings, name)
+	if !deleted.OK {
+		t.Fatalf("DeleteAccount failed: %+v", deleted)
+	}
+	if len(deletedNames) != 1 || deletedNames[0] != "token_oc11f94baa80_dollicons.com_1773142291.json" {
+		t.Fatalf("expected delete to use normalized name directly, got %v", deletedNames)
+	}
+}
+
+func TestClientDeleteDoesNotFallbackToOriginalPathOnNotFound(t *testing.T) {
+	t.Parallel()
+
+	var deletedNames []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/v0/management/auth-files" {
+			http.NotFound(w, r)
+			return
+		}
+		deletedName := r.URL.Query().Get("name")
+		deletedNames = append(deletedNames, deletedName)
+		http.Error(w, `{"error":"auth file not found"}`, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TimeoutSeconds:  5,
+	}
+
+	name := "codex/token_oc11f94baa80_dollicons.com_1773142291.json"
+	deleted := client.DeleteAccount(context.Background(), settings, name)
+	if deleted.OK {
+		t.Fatalf("DeleteAccount unexpectedly succeeded: %+v", deleted)
+	}
+	if len(deletedNames) != 1 || deletedNames[0] != "token_oc11f94baa80_dollicons.com_1773142291.json" {
+		t.Fatalf("expected delete to try only normalized name, got %v", deletedNames)
+	}
+	if !strings.Contains(strings.ToLower(deleted.Error), "auth file not found") {
+		t.Fatalf("expected original not-found error, got %q", deleted.Error)
 	}
 }
 

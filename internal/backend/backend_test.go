@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -19,6 +20,34 @@ type fakeCPAServer struct {
 	fetches   int
 	apiCalls  int
 	apiAuths  []string
+}
+
+type capturedEvent struct {
+	event   string
+	payload any
+}
+
+type captureEmitter struct {
+	mu     sync.Mutex
+	events []capturedEvent
+}
+
+func (e *captureEmitter) Emit(event string, payload any) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.events = append(e.events, capturedEvent{event: event, payload: payload})
+}
+
+func (e *captureEmitter) logEntries() []capturedEvent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	entries := make([]capturedEvent, 0, len(e.events))
+	for _, item := range e.events {
+		if strings.HasSuffix(item.event, ":log") {
+			entries = append(entries, item)
+		}
+	}
+	return entries
 }
 
 func (f *fakeCPAServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -317,6 +346,291 @@ func TestBackendRunScanMaintainAndExport(t *testing.T) {
 	}
 	if len(serverState.reenabled) != 1 || serverState.reenabled[0] != "recovered-codex.json" {
 		t.Fatalf("unexpected reenabled names: %+v", serverState.reenabled)
+	}
+}
+
+func TestBackendBatchAccountActions(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "healthy-codex.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "healthy",
+				"id_token":   `{"chatgpt_account_id":"acct-healthy","plan_type":"pro"}`,
+			},
+			{
+				"name":       "disabled-codex.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "recovered",
+				"disabled":   true,
+				"id_token":   `{"chatgpt_account_id":"acct-disabled","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    4,
+		ActionWorkers:   2,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if _, err := service.SyncInventory(); err != nil {
+		t.Fatalf("SyncInventory: %v", err)
+	}
+
+	probeResult, err := service.ProbeAccounts([]string{"healthy-codex.json", "disabled-codex.json"})
+	if err != nil {
+		t.Fatalf("ProbeAccounts: %v", err)
+	}
+	if probeResult.Requested != 2 || probeResult.Processed != 2 || probeResult.Succeeded != 2 || probeResult.Failed != 0 || probeResult.Skipped != 0 {
+		t.Fatalf("unexpected probe result: %+v", probeResult)
+	}
+
+	enableResult, err := service.SetAccountsDisabled([]string{"healthy-codex.json", "disabled-codex.json"}, false)
+	if err != nil {
+		t.Fatalf("SetAccountsDisabled(enable): %v", err)
+	}
+	if enableResult.Requested != 2 || enableResult.Processed != 1 || enableResult.Succeeded != 1 || enableResult.Failed != 0 || enableResult.Skipped != 1 {
+		t.Fatalf("unexpected enable result: %+v", enableResult)
+	}
+
+	deleteResult, err := service.DeleteAccounts([]string{"healthy-codex.json", "disabled-codex.json"})
+	if err != nil {
+		t.Fatalf("DeleteAccounts: %v", err)
+	}
+	if deleteResult.Requested != 2 || deleteResult.Processed != 2 || deleteResult.Succeeded != 2 || deleteResult.Failed != 0 || deleteResult.Skipped != 0 {
+		t.Fatalf("unexpected delete result: %+v", deleteResult)
+	}
+
+	records, err := service.ListAccounts(AccountFilter{Type: "codex"})
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("expected all records deleted, got %d", len(records))
+	}
+
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if len(serverState.apiAuths) != 2 {
+		t.Fatalf("expected 2 probe calls, got %+v", serverState.apiAuths)
+	}
+	if len(serverState.reenabled) != 1 || serverState.reenabled[0] != "disabled-codex.json" {
+		t.Fatalf("unexpected reenabled names: %+v", serverState.reenabled)
+	}
+	if len(serverState.deleted) != 2 {
+		t.Fatalf("unexpected deleted names: %+v", serverState.deleted)
+	}
+}
+
+func TestBackendBatchAccountActionsEmitLogs(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "healthy-codex.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "healthy",
+				"id_token":   `{"chatgpt_account_id":"acct-healthy","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	emitter := &captureEmitter{}
+	service, err := New(dataDir, emitter)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    4,
+		ActionWorkers:   2,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if _, err := service.SyncInventory(); err != nil {
+		t.Fatalf("SyncInventory: %v", err)
+	}
+
+	if _, err := service.ProbeAccounts([]string{"healthy-codex.json"}); err != nil {
+		t.Fatalf("ProbeAccounts: %v", err)
+	}
+	if _, err := service.SetAccountsDisabled([]string{"healthy-codex.json"}, true); err != nil {
+		t.Fatalf("SetAccountsDisabled: %v", err)
+	}
+	if _, err := service.DeleteAccounts([]string{"healthy-codex.json"}); err != nil {
+		t.Fatalf("DeleteAccounts: %v", err)
+	}
+
+	entries := emitter.logEntries()
+	if len(entries) == 0 {
+		t.Fatal("expected emitted log entries")
+	}
+
+	var messages []string
+	for _, entry := range entries {
+		logEntry, ok := entry.payload.(LogEntry)
+		if !ok {
+			t.Fatalf("unexpected payload type for %s: %T", entry.event, entry.payload)
+		}
+		messages = append(messages, logEntry.Message)
+	}
+
+	expectedSnippets := []string{
+		"Probed account healthy-codex.json -> Normal",
+		"Probe accounts summary: requested=1, processed=1, succeeded=1, failed=0, skipped=0",
+		"Set account healthy-codex.json disabled=yes",
+		"Disable accounts summary: requested=1, processed=1, succeeded=1, failed=0, skipped=0",
+		"Deleted account healthy-codex.json",
+		"Delete accounts summary: requested=1, processed=1, succeeded=1, failed=0, skipped=0",
+	}
+	for _, snippet := range expectedSnippets {
+		found := false
+		for _, message := range messages {
+			if strings.Contains(message, snippet) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected log message containing %q, got %v", snippet, messages)
+		}
+	}
+}
+
+func TestBackendManualActionsNormalizeManagedPathNames(t *testing.T) {
+	var patchedNames []string
+	var deletedNames []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"files": []map[string]any{
+					{
+						"name":       "codex/token_oc11f94baa80_dollicons.com_1773142291.json",
+						"type":       "codex",
+						"provider":   "codex",
+						"auth_index": "healthy",
+						"id_token":   `{"chatgpt_account_id":"acct-healthy","plan_type":"pro"}`,
+					},
+				},
+			})
+		case r.Method == http.MethodPatch && r.URL.Path == "/v0/management/auth-files/status":
+			var body struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			patchedNames = append(patchedNames, body.Name)
+			if !strings.Contains(body.Name, "/") {
+				http.Error(w, `{"error":"auth file not found"}`, http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		case r.Method == http.MethodDelete && r.URL.Path == "/v0/management/auth-files":
+			deletedName := r.URL.Query().Get("name")
+			deletedNames = append(deletedNames, deletedName)
+			if strings.Contains(deletedName, "/") {
+				http.Error(w, `{"error":"invalid name"}`, http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 200,
+				"body":        `{"plan_type":"pro","rate_limit":{"allowed":true,"limit_reached":false}}`,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    4,
+		ActionWorkers:   2,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if _, err := service.SyncInventory(); err != nil {
+		t.Fatalf("SyncInventory: %v", err)
+	}
+
+	if _, err := service.SetAccountsDisabled([]string{"codex/token_oc11f94baa80_dollicons.com_1773142291.json"}, true); err != nil {
+		t.Fatalf("SetAccountsDisabled: %v", err)
+	}
+	if len(patchedNames) != 1 || patchedNames[0] != "codex/token_oc11f94baa80_dollicons.com_1773142291.json" {
+		t.Fatalf("expected original patch name, got %v", patchedNames)
+	}
+
+	if _, err := service.DeleteAccounts([]string{"codex/token_oc11f94baa80_dollicons.com_1773142291.json"}); err != nil {
+		t.Fatalf("DeleteAccounts: %v", err)
+	}
+	if len(deletedNames) != 1 || deletedNames[0] != "token_oc11f94baa80_dollicons.com_1773142291.json" {
+		t.Fatalf("expected delete to use normalized name directly, got %v", deletedNames)
 	}
 }
 

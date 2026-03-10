@@ -65,6 +65,52 @@ func (b *Backend) RunMaintain(options MaintainOptions) (MaintainResult, error) {
 	return result, err
 }
 
+func accountActionLabel(locale string, action string) string {
+	switch action {
+	case "probe":
+		return msg(locale, "task.action.probe")
+	case "delete":
+		return msg(locale, "task.action.delete")
+	case "disable":
+		return msg(locale, "task.action.disable")
+	case "enable":
+		return msg(locale, "task.action.enable")
+	default:
+		return action
+	}
+}
+
+func accountActionLogKind(action string) string {
+	if action == "probe" {
+		return "scan"
+	}
+	return "maintain"
+}
+
+func (b *Backend) emitAccountActionFailure(locale string, action string, name string, err error) {
+	if err == nil {
+		return
+	}
+	b.emitLog(accountActionLogKind(action), "error", msg(locale, "task.action.failed", accountActionLabel(locale, action), name, err.Error()))
+}
+
+func (b *Backend) emitAccountBatchSummary(locale string, action string, result BulkAccountActionResult) {
+	level := "info"
+	if result.Failed > 0 {
+		level = "warning"
+	}
+	b.emitLog(accountActionLogKind(action), level, msg(
+		locale,
+		"task.account.batch_summary",
+		accountActionLabel(locale, action),
+		result.Requested,
+		result.Processed,
+		result.Succeeded,
+		result.Failed,
+		result.Skipped,
+	))
+}
+
 func (b *Backend) ProbeAccount(name string) (AccountRecord, error) {
 	settings, err := b.store.LoadSettings()
 	if err != nil {
@@ -76,19 +122,65 @@ func (b *Backend) ProbeAccount(name string) (AccountRecord, error) {
 
 	record, ok, err := b.store.GetCurrentAccount(name)
 	if err != nil {
+		b.emitAccountActionFailure(settings.Locale, "probe", name, err)
 		return AccountRecord{}, err
 	}
 	if !ok {
-		return AccountRecord{}, errors.New(msg(settings.Locale, "error.account_not_found", name))
+		err = errors.New(msg(settings.Locale, "error.account_not_found", name))
+		b.emitAccountActionFailure(settings.Locale, "probe", name, err)
+		return AccountRecord{}, err
 	}
 
 	probed := b.client.ProbeUsage(context.Background(), settings, record, b.probeRetryLogger(settings.DetailedLogs, "scan", settings.Locale))
 	if err := b.store.UpsertCurrentAccount(probed); err != nil {
+		b.emitAccountActionFailure(settings.Locale, "probe", name, err)
 		return AccountRecord{}, err
 	}
 	b.emitAccountUpdate("probe", false, probed)
 	b.emitLog("scan", "info", msg(settings.Locale, "task.scan.single_probe", probed.Name, stateLabel(settings.Locale, probed.StateKey)))
 	return probed, nil
+}
+
+func (b *Backend) ProbeAccounts(names []string) (BulkAccountActionResult, error) {
+	settings, err := b.store.LoadSettings()
+	if err != nil {
+		return BulkAccountActionResult{}, err
+	}
+	if err := ensureConfigured(settings); err != nil {
+		return BulkAccountActionResult{}, err
+	}
+
+	result := BulkAccountActionResult{
+		Action:    "probe",
+		Requested: len(names),
+		Results:   make([]ActionResult, 0, len(names)),
+	}
+
+	for _, name := range names {
+		result.Processed++
+		record, err := b.ProbeAccount(name)
+		if err != nil {
+			result.Failed++
+			result.Results = append(result.Results, ActionResult{
+				Name:   name,
+				OK:     false,
+				Action: "probe",
+				Error:  err.Error(),
+			})
+			continue
+		}
+
+		result.Succeeded++
+		result.Results = append(result.Results, ActionResult{
+			Name:       name,
+			OK:         true,
+			Action:     "probe",
+			StatusCode: record.APIStatusCode,
+		})
+	}
+
+	b.emitAccountBatchSummary(settings.Locale, "probe", result)
+	return result, nil
 }
 
 func (b *Backend) SetAccountDisabled(name string, disabled bool) (ActionResult, error) {
@@ -99,14 +191,21 @@ func (b *Backend) SetAccountDisabled(name string, disabled bool) (ActionResult, 
 	if err := ensureConfigured(settings); err != nil {
 		return ActionResult{}, err
 	}
+	action := "disable"
+	if !disabled {
+		action = "enable"
+	}
 
 	result := b.client.SetAccountDisabled(context.Background(), settings, name, disabled)
 	if !result.OK {
-		return result, errors.New(result.Error)
+		err = errors.New(result.Error)
+		b.emitAccountActionFailure(settings.Locale, action, name, err)
+		return result, err
 	}
 
 	record, ok, err := b.store.GetCurrentAccount(name)
 	if err != nil {
+		b.emitAccountActionFailure(settings.Locale, action, name, err)
 		return result, err
 	}
 	if ok {
@@ -121,12 +220,92 @@ func (b *Backend) SetAccountDisabled(name string, disabled bool) (ActionResult, 
 		}
 		record.UpdatedAt = nowISO()
 		if err := b.store.UpsertCurrentAccount(record); err != nil {
+			b.emitAccountActionFailure(settings.Locale, action, name, err)
 			return result, err
 		}
 		b.emitAccountUpdate("manual_toggle", false, record)
 	}
 
 	b.emitLog("maintain", "info", msg(settings.Locale, "task.account.set_disabled", name, boolLabel(settings.Locale, disabled)))
+	return result, nil
+}
+
+func (b *Backend) SetAccountsDisabled(names []string, disabled bool) (BulkAccountActionResult, error) {
+	settings, err := b.store.LoadSettings()
+	if err != nil {
+		return BulkAccountActionResult{}, err
+	}
+	if err := ensureConfigured(settings); err != nil {
+		return BulkAccountActionResult{}, err
+	}
+
+	action := "disable"
+	if !disabled {
+		action = "enable"
+	}
+	result := BulkAccountActionResult{
+		Action:    action,
+		Requested: len(names),
+		Results:   make([]ActionResult, 0, len(names)),
+	}
+
+	for _, name := range names {
+		record, ok, err := b.store.GetCurrentAccount(name)
+		if err != nil {
+			b.emitAccountActionFailure(settings.Locale, action, name, err)
+			result.Processed++
+			result.Failed++
+			result.Results = append(result.Results, ActionResult{
+				Name:   name,
+				OK:     false,
+				Action: action,
+				Error:  err.Error(),
+			})
+			continue
+		}
+		if !ok {
+			err = errors.New(msg(settings.Locale, "error.account_not_found", name))
+			b.emitAccountActionFailure(settings.Locale, action, name, err)
+			result.Processed++
+			result.Failed++
+			result.Results = append(result.Results, ActionResult{
+				Name:   name,
+				OK:     false,
+				Action: action,
+				Error:  err.Error(),
+			})
+			continue
+		}
+		if record.Disabled == disabled {
+			result.Skipped++
+			disabledValue := record.Disabled
+			result.Results = append(result.Results, ActionResult{
+				Name:     name,
+				OK:       true,
+				Action:   action,
+				Disabled: &disabledValue,
+			})
+			continue
+		}
+
+		result.Processed++
+		actionResult, err := b.SetAccountDisabled(name, disabled)
+		if err != nil {
+			result.Failed++
+			result.Results = append(result.Results, ActionResult{
+				Name:     name,
+				OK:       false,
+				Action:   action,
+				Disabled: actionResult.Disabled,
+				Error:    err.Error(),
+			})
+			continue
+		}
+		result.Succeeded++
+		result.Results = append(result.Results, actionResult)
+	}
+
+	b.emitAccountBatchSummary(settings.Locale, action, result)
 	return result, nil
 }
 
@@ -139,21 +318,67 @@ func (b *Backend) DeleteAccount(name string) (ActionResult, error) {
 		return ActionResult{}, err
 	}
 
-	record, _, err := b.store.GetCurrentAccount(name)
+	record, ok, err := b.store.GetCurrentAccount(name)
 	if err != nil {
+		b.emitAccountActionFailure(settings.Locale, "delete", name, err)
 		return ActionResult{}, err
+	}
+	if !ok {
+		err = errors.New(msg(settings.Locale, "error.account_not_found", name))
+		result := ActionResult{Name: name, OK: false, Action: "delete", Error: err.Error()}
+		b.emitAccountActionFailure(settings.Locale, "delete", name, err)
+		return result, err
 	}
 
 	result := b.client.DeleteAccount(context.Background(), settings, name)
 	if !result.OK {
-		return result, errors.New(result.Error)
+		err = errors.New(result.Error)
+		b.emitAccountActionFailure(settings.Locale, "delete", name, err)
+		return result, err
 	}
 
 	if err := b.store.DeleteCurrentAccount(name); err != nil {
+		b.emitAccountActionFailure(settings.Locale, "delete", name, err)
 		return result, err
 	}
 	b.emitAccountUpdate("manual_delete", true, record)
 	b.emitLog("maintain", "info", msg(settings.Locale, "task.account.deleted", name))
+	return result, nil
+}
+
+func (b *Backend) DeleteAccounts(names []string) (BulkAccountActionResult, error) {
+	settings, err := b.store.LoadSettings()
+	if err != nil {
+		return BulkAccountActionResult{}, err
+	}
+	if err := ensureConfigured(settings); err != nil {
+		return BulkAccountActionResult{}, err
+	}
+
+	result := BulkAccountActionResult{
+		Action:    "delete",
+		Requested: len(names),
+		Results:   make([]ActionResult, 0, len(names)),
+	}
+
+	for _, name := range names {
+		result.Processed++
+		actionResult, err := b.DeleteAccount(name)
+		if err != nil {
+			result.Failed++
+			result.Results = append(result.Results, ActionResult{
+				Name:   name,
+				OK:     false,
+				Action: "delete",
+				Error:  err.Error(),
+			})
+			continue
+		}
+		result.Succeeded++
+		result.Results = append(result.Results, actionResult)
+	}
+
+	b.emitAccountBatchSummary(settings.Locale, "delete", result)
 	return result, nil
 }
 

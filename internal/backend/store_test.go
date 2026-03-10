@@ -53,6 +53,7 @@ func TestStoreSettingsAndHistory(t *testing.T) {
 			Type:      "codex",
 			Provider:  "codex",
 			Email:     "one@example.com",
+			PlanType:  "pro",
 			State:     stateNormal,
 			StateKey:  stateNormal,
 			UpdatedAt: nowISO(),
@@ -63,6 +64,7 @@ func TestStoreSettingsAndHistory(t *testing.T) {
 			Provider:       "codex",
 			Email:          "two@example.com",
 			PlanType:       "free",
+			Disabled:       true,
 			ProbeErrorText: "timeout",
 			State:          stateError,
 			StateKey:       stateError,
@@ -96,6 +98,29 @@ func TestStoreSettingsAndHistory(t *testing.T) {
 	}
 	if page.TotalRecords != 2 || len(page.Records) != 1 || len(page.ProviderOptions) != 1 || page.ProviderOptions[0] != "codex" {
 		t.Fatalf("unexpected account page: %+v", page)
+	}
+	if len(page.PlanOptions) != 2 || page.PlanOptions[0] != "free" || page.PlanOptions[1] != "pro" {
+		t.Fatalf("unexpected plan options: %+v", page.PlanOptions)
+	}
+
+	disabled := true
+	disabledItems, err := store.ListAccounts(AccountFilter{Type: "codex", Provider: "codex", Disabled: &disabled})
+	if err != nil {
+		t.Fatalf("ListAccounts disabled filter: %v", err)
+	}
+	if len(disabledItems) != 1 || disabledItems[0].Name != "codex-2.json" {
+		t.Fatalf("unexpected disabled filter result: %+v", disabledItems)
+	}
+
+	proPage, err := store.ListAccountsPage(AccountFilter{Type: "codex", Provider: "codex", PlanType: "pro"}, 1, 10)
+	if err != nil {
+		t.Fatalf("ListAccountsPage plan filter: %v", err)
+	}
+	if proPage.TotalRecords != 1 || len(proPage.Records) != 1 || proPage.Records[0].Name != "codex-1.json" {
+		t.Fatalf("unexpected plan filter page: %+v", proPage)
+	}
+	if len(proPage.PlanOptions) != 2 || proPage.PlanOptions[0] != "free" || proPage.PlanOptions[1] != "pro" {
+		t.Fatalf("unexpected plan options for filtered page: %+v", proPage.PlanOptions)
 	}
 
 	summarySnapshot, err := store.SummarizeAccounts(AccountFilter{Type: "codex"})

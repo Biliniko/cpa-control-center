@@ -171,6 +171,14 @@ func (a *App) ProbeAccount(name string) (backend.AccountRecord, error) {
 	return service.ProbeAccount(name)
 }
 
+func (a *App) ProbeAccounts(names []string) (backend.BulkAccountActionResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.BulkAccountActionResult{}, err
+	}
+	return service.ProbeAccounts(names)
+}
+
 func (a *App) SetAccountDisabled(name string, disabled bool) (backend.ActionResult, error) {
 	service, err := a.ensureBackend()
 	if err != nil {
@@ -179,12 +187,28 @@ func (a *App) SetAccountDisabled(name string, disabled bool) (backend.ActionResu
 	return service.SetAccountDisabled(name, disabled)
 }
 
+func (a *App) SetAccountsDisabled(names []string, disabled bool) (backend.BulkAccountActionResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.BulkAccountActionResult{}, err
+	}
+	return service.SetAccountsDisabled(names, disabled)
+}
+
 func (a *App) DeleteAccount(name string) (backend.ActionResult, error) {
 	service, err := a.ensureBackend()
 	if err != nil {
 		return backend.ActionResult{}, err
 	}
 	return service.DeleteAccount(name)
+}
+
+func (a *App) DeleteAccounts(names []string) (backend.BulkAccountActionResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.BulkAccountActionResult{}, err
+	}
+	return service.DeleteAccounts(names)
 }
 
 func (a *App) ExportAccounts(kind string, format string, path string) (backend.ExportResult, error) {

@@ -50,10 +50,12 @@ type ConnectionResult struct {
 }
 
 type AccountFilter struct {
-	Query    string `json:"query"`
-	State    string `json:"state"`
-	Provider string `json:"provider"`
-	Type     string `json:"type"`
+	Query    string  `json:"query"`
+	State    string  `json:"state"`
+	Provider string  `json:"provider"`
+	Type     string  `json:"type"`
+	PlanType string  `json:"planType"`
+	Disabled *bool   `json:"disabled"`
 }
 
 type AccountRecord struct {
@@ -119,6 +121,7 @@ type AccountPage struct {
 	Page            int             `json:"page"`
 	PageSize        int             `json:"pageSize"`
 	ProviderOptions []string        `json:"providerOptions"`
+	PlanOptions     []string        `json:"planOptions"`
 }
 
 type InventorySyncResult struct {
@@ -147,6 +150,16 @@ type ActionResult struct {
 	Disabled   *bool  `json:"disabled"`
 	StatusCode *int   `json:"statusCode"`
 	Error      string `json:"error"`
+}
+
+type BulkAccountActionResult struct {
+	Action    string         `json:"action"`
+	Requested int            `json:"requested"`
+	Processed int            `json:"processed"`
+	Succeeded int            `json:"succeeded"`
+	Failed    int            `json:"failed"`
+	Skipped   int            `json:"skipped"`
+	Results   []ActionResult `json:"results"`
 }
 
 type ExportRequest struct {

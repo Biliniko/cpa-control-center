@@ -267,6 +267,7 @@ func (s *Store) ListAccountsPage(filter AccountFilter, page int, pageSize int) (
 		PageSize:        pageSize,
 		Records:         make([]AccountRecord, 0),
 		ProviderOptions: make([]string, 0),
+		PlanOptions:     make([]string, 0),
 	}
 
 	whereClause, whereArgs := currentAccountsWhereClause(filter)
@@ -317,6 +318,12 @@ func (s *Store) ListAccountsPage(filter AccountFilter, page int, pageSize int) (
 		return result, err
 	}
 	result.ProviderOptions = providerOptions
+
+	planOptions, err := s.listPlanOptions(filter)
+	if err != nil {
+		return result, err
+	}
+	result.PlanOptions = planOptions
 
 	return result, nil
 }
@@ -828,6 +835,14 @@ func currentAccountsWhereClause(filter AccountFilter) (string, []any) {
 		conditions = append(conditions, `state_key = ?`)
 		args = append(args, normalizeStateKey(trimmed))
 	}
+	if trimmed := strings.ToLower(strings.TrimSpace(filter.PlanType)); trimmed != "" {
+		conditions = append(conditions, `LOWER(plan_type) = ?`)
+		args = append(args, trimmed)
+	}
+	if filter.Disabled != nil {
+		conditions = append(conditions, `disabled = ?`)
+		args = append(args, boolToInt(*filter.Disabled))
+	}
 	if trimmed := strings.ToLower(strings.TrimSpace(filter.Query)); trimmed != "" {
 		pattern := "%" + trimmed + "%"
 		conditions = append(conditions, `(LOWER(name) LIKE ? OR LOWER(email) LIKE ? OR LOWER(provider) LIKE ? OR LOWER(plan_type) LIKE ? OR LOWER(probe_error_text) LIKE ?)`)
@@ -877,6 +892,35 @@ func (s *Store) listProviderOptions(filter AccountFilter) ([]string, error) {
 		}
 		if strings.TrimSpace(provider) != "" {
 			options = append(options, provider)
+		}
+	}
+	return options, rows.Err()
+}
+
+func (s *Store) listPlanOptions(filter AccountFilter) ([]string, error) {
+	planFilter := filter
+	planFilter.PlanType = ""
+
+	whereClause, args := currentAccountsWhereClause(planFilter)
+	rows, err := s.db.Query(
+		`SELECT DISTINCT plan_type
+		   FROM accounts_current`+whereClause+`
+		  ORDER BY LOWER(plan_type) ASC`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var options []string
+	for rows.Next() {
+		var planType string
+		if err := rows.Scan(&planType); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(planType) != "" {
+			options = append(options, planType)
 		}
 	}
 	return options, rows.Err()

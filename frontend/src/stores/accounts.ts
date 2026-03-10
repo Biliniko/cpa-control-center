@@ -1,18 +1,22 @@
 import { defineStore } from 'pinia'
 import {
   DeleteAccount,
+  DeleteAccounts,
   ExportAccounts,
   GetDashboardSnapshot,
   GetScanDetailsPage,
   ListAccountsPage,
   ProbeAccount,
+  ProbeAccounts,
   SetAccountDisabled,
+  SetAccountsDisabled,
   SyncInventory,
 } from '../../wailsjs/go/main/App'
 import type {
   AccountFilter,
   AccountPage,
   AccountRecord,
+  BulkAccountActionResult,
   DashboardSnapshot,
   DashboardSummary,
   ExportResult,
@@ -27,9 +31,12 @@ interface AccountsState {
   records: AccountRecord[]
   totalRecords: number
   providerOptions: string[]
+  planOptions: string[]
   query: string
   stateFilter: string
   providerFilter: string
+  planFilter: string
+  disabledFilter: boolean | null
   page: number
   pageSize: number
   summary: DashboardSummary
@@ -63,14 +70,21 @@ function updateCurrentPageRecord(records: AccountRecord[], record: AccountRecord
   return records
 }
 
+function normalizeFilterText(value: unknown) {
+  return typeof value === 'string' ? value : ''
+}
+
 export const useAccountsStore = defineStore('accountsStore', {
   state: (): AccountsState => ({
     records: [],
     totalRecords: 0,
     providerOptions: [],
+    planOptions: [],
     query: '',
     stateFilter: '',
     providerFilter: '',
+    planFilter: '',
+    disabledFilter: null,
     page: 1,
     pageSize: 20,
     summary: emptySummary(),
@@ -83,10 +97,12 @@ export const useAccountsStore = defineStore('accountsStore', {
     hasInventory: (state) => state.summary.totalAccounts > 0,
     needsInitialScan: (state) => state.summary.filteredAccounts > 0 && !state.summary.lastScanAt,
     currentFilter: (state): AccountFilter => ({
-      query: state.query,
-      state: state.stateFilter,
-      provider: state.providerFilter,
+      query: normalizeFilterText(state.query),
+      state: normalizeFilterText(state.stateFilter),
+      provider: normalizeFilterText(state.providerFilter),
       type: '',
+      planType: normalizeFilterText(state.planFilter),
+      ...(state.disabledFilter === null ? {} : { disabled: state.disabledFilter }),
     }),
   },
   actions: {
@@ -117,12 +133,13 @@ export const useAccountsStore = defineStore('accountsStore', {
           },
           this.page,
           this.pageSize,
-        ) as AccountPage
+        ) as unknown as AccountPage
         this.records = Array.isArray(page.records) ? page.records : []
         this.totalRecords = page.totalRecords
         this.page = page.page
         this.pageSize = page.pageSize
         this.providerOptions = Array.isArray(page.providerOptions) ? page.providerOptions : []
+        this.planOptions = Array.isArray(page.planOptions) ? page.planOptions : []
         return page
       } finally {
         this.pageLoading = false
@@ -159,6 +176,13 @@ export const useAccountsStore = defineStore('accountsStore', {
         throw new Error(toErrorMessage(error))
       }
     },
+    async probeAccounts(names: string[]) {
+      try {
+        return await ProbeAccounts(names) as BulkAccountActionResult
+      } catch (error) {
+        throw new Error(toErrorMessage(error))
+      }
+    },
     async setAccountDisabled(name: string, disabled: boolean) {
       try {
         return await SetAccountDisabled(name, disabled)
@@ -166,9 +190,23 @@ export const useAccountsStore = defineStore('accountsStore', {
         throw new Error(toErrorMessage(error))
       }
     },
+    async setAccountsDisabled(names: string[], disabled: boolean) {
+      try {
+        return await SetAccountsDisabled(names, disabled) as BulkAccountActionResult
+      } catch (error) {
+        throw new Error(toErrorMessage(error))
+      }
+    },
     async deleteAccount(name: string) {
       try {
         return await DeleteAccount(name)
+      } catch (error) {
+        throw new Error(toErrorMessage(error))
+      }
+    },
+    async deleteAccounts(names: string[]) {
+      try {
+        return await DeleteAccounts(names) as BulkAccountActionResult
       } catch (error) {
         throw new Error(toErrorMessage(error))
       }
