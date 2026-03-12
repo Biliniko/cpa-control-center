@@ -1347,6 +1347,22 @@ select {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.view-shell--accounts > .panel--fill {
+  min-height: 0;
+  overflow: auto;
+}
+
+.view-shell--accounts .panel__body--table {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.view-shell--accounts .table-wrap {
+  flex: 1 1 320px;
+  min-height: 320px;
+}
+
 .view-shell--logs {
   grid-template-rows: auto minmax(0, 1fr);
 }
@@ -2278,11 +2294,21 @@ select {
 }
 
 .app-shell--compact .view-shell--accounts .toolbar-group--compact {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: center;
   flex: 0 0 auto;
   width: 100%;
   gap: 0.55rem;
+}
+
+.app-shell--compact .view-shell--accounts .panel__body--table {
+  gap: 0.7rem;
+}
+
+.app-shell--compact .view-shell--accounts .table-wrap {
+  min-height: 240px;
 }
 
 .app-shell--compact .accounts-bulkbar {
@@ -2305,8 +2331,9 @@ select {
 }
 
 .app-shell--compact .accounts-bulkbar__actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   width: 100%;
   justify-content: flex-start;
 }
@@ -2318,12 +2345,15 @@ select {
 .app-shell--compact .toolbar-group--compact .el-button,
 .app-shell--compact .accounts-bulkbar__actions .el-button,
 .app-shell--compact .row-actions .el-button {
-  padding-inline: 0.62rem;
+  min-height: 32px;
+  padding-inline: 0.72rem;
+  font-size: 0.88rem;
 }
 
 .app-shell--compact .view-shell--accounts .toolbar-group--compact .el-button,
 .app-shell--compact .accounts-bulkbar__actions .el-button {
-  width: 100%;
+  width: auto;
+  flex: 0 0 auto;
 }
 
 .app-shell--compact .table-footer {
