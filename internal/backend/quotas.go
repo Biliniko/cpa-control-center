@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -111,9 +112,9 @@ func (b *Backend) GetCodexQuotaSnapshot() (CodexQuotaSnapshot, error) {
 
 	if len(records) == 0 {
 		b.emitProgress("quota", "complete", 0, 0, finishMessage, true)
-		b.emitLog("quota", "warning", finishMessage)
 		return CodexQuotaSnapshot{
 			Plans:              nil,
+			Accounts:           nil,
 			FetchedAt:          timestamp,
 			TotalAccounts:      0,
 			SuccessfulAccounts: 0,
@@ -125,6 +126,7 @@ func (b *Backend) GetCodexQuotaSnapshot() (CodexQuotaSnapshot, error) {
 	b.emitProgress("quota", "query", 0, len(records), msg(settings.Locale, "task.quota.querying_account", records[0].Name), false)
 
 	accumulators := map[string]*planQuotaAccumulator{}
+	accountDetails := make([]CodexQuotaAccountDetail, 0, len(records))
 	var successfulAccounts int
 	var failedAccounts int
 
@@ -143,6 +145,7 @@ func (b *Backend) GetCodexQuotaSnapshot() (CodexQuotaSnapshot, error) {
 		if outcome.err != nil {
 			failedAccounts++
 			markQuotaAccountFailure(accumulator)
+			accountDetails = append(accountDetails, buildQuotaAccountDetail(outcome, timestamp))
 			continue
 		}
 		if outcome.usagePlanType != "" && outcome.usagePlanType != planType {
@@ -153,28 +156,42 @@ func (b *Backend) GetCodexQuotaSnapshot() (CodexQuotaSnapshot, error) {
 			planType = outcome.usagePlanType
 		}
 
+		outcome.result = normalizeQuotaBucketResult(outcome.result)
 		successfulAccounts++
 		applyQuotaBucketResult(accumulator, outcome.result)
+		accountDetails = append(accountDetails, buildQuotaAccountDetail(outcome, timestamp))
 	}
 
 	plans := make([]CodexPlanQuotaSummary, 0, len(accumulators))
 	for _, key := range sortedPlanKeys(accumulators) {
 		plans = append(plans, buildPlanQuotaSummary(accumulators[key]))
 	}
+	sort.Slice(accountDetails, func(i, j int) bool {
+		leftPlan := normalizeQuotaPlanType(accountDetails[i].PlanType)
+		rightPlan := normalizeQuotaPlanType(accountDetails[j].PlanType)
+		leftRank, leftKnown := planOrder[leftPlan]
+		rightRank, rightKnown := planOrder[rightPlan]
+		switch {
+		case leftKnown && rightKnown && leftRank != rightRank:
+			return leftRank < rightRank
+		case leftKnown != rightKnown:
+			return leftKnown
+		case accountDetails[i].Success != accountDetails[j].Success:
+			return accountDetails[i].Success
+		default:
+			return accountDetails[i].Name < accountDetails[j].Name
+		}
+	})
 
 	snapshot := CodexQuotaSnapshot{
 		Plans:              plans,
+		Accounts:           accountDetails,
 		FetchedAt:          timestamp,
 		TotalAccounts:      successfulAccounts + failedAccounts,
 		SuccessfulAccounts: successfulAccounts,
 		FailedAccounts:     failedAccounts,
 	}
 	finishMessage = msg(settings.Locale, "task.quota.completed", snapshot.TotalAccounts, snapshot.SuccessfulAccounts, snapshot.FailedAccounts)
-	if snapshot.FailedAccounts > 0 {
-		b.emitLog("quota", "warning", finishMessage)
-	} else {
-		b.emitLog("quota", "info", finishMessage)
-	}
 	b.emitProgress("quota", "complete", 1, 1, finishMessage, true)
 	return snapshot, nil
 }
@@ -278,9 +295,10 @@ func (b *Backend) fetchQuotaOutcomes(ctx context.Context, settings AppSettings, 
 					current := int(atomic.AddInt64(&completed, 1))
 					if outcome.err != nil {
 						b.emitLog("quota", "warning", msg(settings.Locale, "task.quota.account_failed", record.Name, outcome.err))
+						b.emitDetailedLog(settings.DetailedLogs, "quota", "warning", quotaBucketLogSummary(settings.Locale, record.Name, outcome.planType, quotaBucketResult{}))
 					} else {
 						logPlanType := stringOr(outcome.usagePlanType, outcome.planType)
-						b.emitDetailedLog(settings.DetailedLogs, "quota", "info", msg(settings.Locale, "task.quota.account_loaded", record.Name, logPlanType))
+						b.emitDetailedLog(settings.DetailedLogs, "quota", "info", quotaBucketLogSummary(settings.Locale, record.Name, logPlanType, outcome.result))
 					}
 					b.emitProgress("quota", "query", current, len(records), msg(settings.Locale, "task.quota.querying_account", record.Name), current == len(records))
 
@@ -363,6 +381,22 @@ func applyQuotaBucketResult(plan *planQuotaAccumulator, result quotaBucketResult
 	applyQuotaBucketValue(&plan.codeReviewWeekly, result.codeReviewWeekly)
 }
 
+func normalizeQuotaBucketResult(result quotaBucketResult) quotaBucketResult {
+	if result.weekly == nil || result.fiveHour == nil {
+		return result
+	}
+	if result.weekly.remainingPercent > 0 {
+		return result
+	}
+
+	normalized := result
+	normalized.fiveHour = &quotaBucketValue{
+		remainingPercent: 0,
+		resetAt:          stringOr(result.weekly.resetAt, result.fiveHour.resetAt),
+	}
+	return normalized
+}
+
 func applyQuotaBucketValue(bucket *quotaBucketAccumulator, value *quotaBucketValue) {
 	if !bucket.supported {
 		return
@@ -388,6 +422,70 @@ func buildPlanQuotaSummary(plan *planQuotaAccumulator) CodexPlanQuotaSummary {
 	}
 }
 
+func buildQuotaAccountDetail(outcome quotaFetchOutcome, fetchedAt string) CodexQuotaAccountDetail {
+	planType := stringOr(outcome.usagePlanType, outcome.planType, outcome.record.PlanType)
+	detail := CodexQuotaAccountDetail{
+		Name:             outcome.record.Name,
+		Email:            outcome.record.Email,
+		PlanType:         planType,
+		Provider:         outcome.record.Provider,
+		Success:          outcome.err == nil,
+		FetchedAt:        fetchedAt,
+		FiveHour:         emptyQuotaBucketDetail(planType, quotaBucketFiveHour),
+		Weekly:           emptyQuotaBucketDetail(planType, quotaBucketWeekly),
+		CodeReviewWeekly: emptyQuotaBucketDetail(planType, quotaBucketCodeReviewWeekly),
+	}
+	if outcome.err != nil {
+		detail.Error = outcome.err.Error()
+		return detail
+	}
+	detail.FiveHour = quotaBucketDetail(planType, quotaBucketFiveHour, outcome.result.fiveHour)
+	detail.Weekly = quotaBucketDetail(planType, quotaBucketWeekly, outcome.result.weekly)
+	detail.CodeReviewWeekly = quotaBucketDetail(planType, quotaBucketCodeReviewWeekly, outcome.result.codeReviewWeekly)
+	detail.EarliestResetAt = earliestQuotaBucketReset(detail.FiveHour, detail.Weekly, detail.CodeReviewWeekly)
+	return detail
+}
+
+func quotaBucketDetail(planType string, bucket quotaBucketKey, value *quotaBucketValue) QuotaBucketDetail {
+	detail := emptyQuotaBucketDetail(planType, bucket)
+	if value == nil {
+		return detail
+	}
+	detail.RemainingPercent = float64Ptr(roundToOneDecimal(value.remainingPercent))
+	detail.ResetAt = value.resetAt
+	return detail
+}
+
+func emptyQuotaBucketDetail(planType string, bucket quotaBucketKey) QuotaBucketDetail {
+	return QuotaBucketDetail{
+		Supported: quotaBucketSupported(planType, bucket),
+	}
+}
+
+func quotaBucketSupported(planType string, bucket quotaBucketKey) bool {
+	switch bucket {
+	case quotaBucketFiveHour:
+		return normalizeQuotaPlanType(planType) != "free"
+	case quotaBucketWeekly, quotaBucketCodeReviewWeekly:
+		return true
+	default:
+		return false
+	}
+}
+
+func earliestQuotaBucketReset(buckets ...QuotaBucketDetail) string {
+	earliest := ""
+	for _, bucket := range buckets {
+		if bucket.ResetAt == "" {
+			continue
+		}
+		if earliest == "" || earlierReset(bucket.ResetAt, earliest) {
+			earliest = bucket.ResetAt
+		}
+	}
+	return earliest
+}
+
 func buildQuotaBucketSummary(bucket quotaBucketAccumulator) QuotaBucketSummary {
 	summary := QuotaBucketSummary{
 		Supported:    bucket.supported,
@@ -401,16 +499,51 @@ func buildQuotaBucketSummary(bucket quotaBucketAccumulator) QuotaBucketSummary {
 	return summary
 }
 
+func quotaBucketLogSummary(locale string, accountName string, planType string, result quotaBucketResult) string {
+	return msg(
+		locale,
+		"task.quota.bucket_summary",
+		accountName,
+		stringOr(planType, "unknown"),
+		quotaBucketLogStatus(locale, planType, quotaBucketFiveHour, result.fiveHour),
+		quotaBucketLogStatus(locale, planType, quotaBucketWeekly, result.weekly),
+		quotaBucketLogStatus(locale, planType, quotaBucketCodeReviewWeekly, result.codeReviewWeekly),
+	)
+}
+
+func quotaBucketLogStatus(locale string, planType string, bucket quotaBucketKey, value *quotaBucketValue) string {
+	if !quotaBucketSupported(planType, bucket) {
+		return msg(locale, "task.quota.bucket_unsupported")
+	}
+	if value == nil {
+		return msg(locale, "task.quota.bucket_failed")
+	}
+	percent := formatQuotaBucketPercent(value.remainingPercent)
+	if value.resetAt == "" {
+		return msg(locale, "task.quota.bucket_success", percent)
+	}
+	return msg(locale, "task.quota.bucket_success_reset", percent, value.resetAt)
+}
+
+func formatQuotaBucketPercent(value float64) string {
+	rounded := roundToOneDecimal(value)
+	if math.Abs(rounded-math.Round(rounded)) < 0.05 {
+		return fmt.Sprintf("%.0f", math.Round(rounded))
+	}
+	return fmt.Sprintf("%.1f", rounded)
+}
+
 func parseQuotaBucketResult(payload map[string]any) (quotaBucketResult, error) {
+	planType := normalizeQuotaPlanType(stringValue(payload["plan_type"]))
 	candidates := collectQuotaCandidates("", payload)
 	if len(candidates) == 0 {
 		return quotaBucketResult{}, errors.New("no quota buckets found")
 	}
 
 	return quotaBucketResult{
-		fiveHour:         selectQuotaCandidateValue(candidates, quotaBucketFiveHour),
-		weekly:           selectQuotaCandidateValue(candidates, quotaBucketWeekly),
-		codeReviewWeekly: selectQuotaCandidateValue(candidates, quotaBucketCodeReviewWeekly),
+		fiveHour:         selectQuotaCandidateValue(candidates, quotaBucketFiveHour, planType),
+		weekly:           selectQuotaCandidateValue(candidates, quotaBucketWeekly, planType),
+		codeReviewWeekly: selectQuotaCandidateValue(candidates, quotaBucketCodeReviewWeekly, planType),
 	}, nil
 }
 
@@ -458,7 +591,7 @@ func buildQuotaCandidate(path string, payload map[string]any) (quotaCandidate, b
 }
 
 func quotaWindowDuration(payload map[string]any) time.Duration {
-	if seconds := durationFromKeys(payload, []string{"window_seconds", "windowSecs", "window_sec", "interval_seconds", "period_seconds", "reset_after_seconds"}); seconds > 0 {
+	if seconds := durationFromKeys(payload, []string{"window_seconds", "windowSecs", "window_sec", "interval_seconds", "period_seconds"}); seconds > 0 {
 		return seconds
 	}
 	if hours := durationFromKeys(payload, []string{"window_hours", "interval_hours", "period_hours"}); hours > 0 {
@@ -499,11 +632,11 @@ func quotaCandidateScoreBoost(payload map[string]any) int {
 	return score
 }
 
-func selectQuotaCandidateValue(candidates []quotaCandidate, bucket quotaBucketKey) *quotaBucketValue {
+func selectQuotaCandidateValue(candidates []quotaCandidate, bucket quotaBucketKey, planType string) *quotaBucketValue {
 	bestScore := math.MinInt
 	var best *quotaCandidate
 	for i := range candidates {
-		score := quotaCandidateMatchScore(candidates[i], bucket)
+		score := quotaCandidateMatchScore(candidates[i], bucket, planType)
 		if score > bestScore {
 			bestScore = score
 			best = &candidates[i]
@@ -518,12 +651,15 @@ func selectQuotaCandidateValue(candidates []quotaCandidate, bucket quotaBucketKe
 	}
 }
 
-func quotaCandidateMatchScore(candidate quotaCandidate, bucket quotaBucketKey) int {
+func quotaCandidateMatchScore(candidate quotaCandidate, bucket quotaBucketKey, planType string) int {
 	path := candidate.path
 	score := candidate.scoreBoost
+	normalizedPlan := normalizeQuotaPlanType(planType)
 	isReview := strings.Contains(path, "code_review") || strings.Contains(path, "codereview") || strings.Contains(path, "review")
 	isWeekly := strings.Contains(path, "weekly") || strings.Contains(path, "week")
 	isFiveHour := strings.Contains(path, "five_hour") || strings.Contains(path, "fivehour") || strings.Contains(path, "5h") || strings.Contains(path, "5_hour")
+	isRateLimitPrimary := strings.Contains(path, "rate_limit.primary_window")
+	isRateLimitSecondary := strings.Contains(path, "rate_limit.secondary_window")
 	matched := false
 
 	switch bucket {
@@ -533,6 +669,10 @@ func quotaCandidateMatchScore(candidate quotaCandidate, bucket quotaBucketKey) i
 		}
 		matched = true
 		score += 6
+		if isRateLimitPrimary {
+			score += 6
+			matched = true
+		}
 		if nearDuration(candidate.window, 7*24*time.Hour, 24*time.Hour) {
 			score += 4
 			matched = true
@@ -542,8 +682,15 @@ func quotaCandidateMatchScore(candidate quotaCandidate, bucket quotaBucketKey) i
 			matched = true
 		}
 	case quotaBucketFiveHour:
+		if normalizedPlan == "free" {
+			return -1
+		}
 		if isReview {
 			return -1
+		}
+		if isRateLimitPrimary {
+			score += 8
+			matched = true
 		}
 		if nearDuration(candidate.window, 5*time.Hour, 45*time.Minute) {
 			score += 6
@@ -559,6 +706,14 @@ func quotaCandidateMatchScore(candidate quotaCandidate, bucket quotaBucketKey) i
 	case quotaBucketWeekly:
 		if isReview {
 			return -1
+		}
+		if normalizedPlan == "free" && isRateLimitPrimary {
+			score += 8
+			matched = true
+		}
+		if isRateLimitSecondary {
+			score += 8
+			matched = true
 		}
 		if nearDuration(candidate.window, 5*time.Hour, 45*time.Minute) {
 			return -1

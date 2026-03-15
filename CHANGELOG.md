@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Highlights
+
+- Rebuilt the Codex quota page into a dedicated workspace with three coordinated views: plan overview cards, an account matrix, and a recovery board.
+- Added account-level quota details to the backend snapshot so the desktop app can inspect successful and failed quota fetches without flattening everything into plan-only summaries.
+- Added richer quota interactions including result filters, plan filters, matrix sorting, row-based pagination, detail side panels, and recovery-mode filtering for earliest, `5h`, and weekly reset windows.
+- Added in-app quota auto-refresh support driven by a separate cron setting, with task progress flowing through the existing quota task stream.
+- Tightened quota semantics so unsupported `5h` buckets sort correctly, weekly-exhausted accounts no longer show misleading residual `5h` availability, and failure-only snapshots route users toward account-level failure data instead of looking like empty filter results.
+
+### Notes
+
+- The quota workspace is still desktop-first and tuned for dense operational review rather than a lightweight mobile-style card feed.
+- Quota auto-refresh only runs while the application is open; it is not an OS-level background job.
+- This documentation update does not create a release tag and does not publish a GitHub release.
+
 ## v1.4.0
 
 ### Highlights

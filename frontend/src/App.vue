@@ -115,6 +115,18 @@ const shellClasses = computed(() => ({
 
 provide(shellModeKey, shellMode)
 
+function resetQuotaViewScroll() {
+  const quotaView = appViewport.value?.querySelector<HTMLElement>('.view-shell--quotas')
+  if (!quotaView) {
+    return
+  }
+  quotaView.scrollTo({
+    top: 0,
+    left: 0,
+    behavior: 'auto',
+  })
+}
+
 async function refreshShell() {
   await nextTick()
   await new Promise<void>((resolve) => {
@@ -394,9 +406,15 @@ onErrorCaptured((error, instance, info) => {
   return false
 })
 
-watch(activeView, (value) => {
+watch(activeView, async (value) => {
   if (value !== 'quotas' && quotasStore.error) {
     quotasStore.error = ''
+  }
+  if (value === 'quotas') {
+    await nextTick()
+    window.requestAnimationFrame(() => {
+      resetQuotaViewScroll()
+    })
   }
   emitDebug('app', 'active view changed', { value })
 })

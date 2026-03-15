@@ -1,35 +1,35 @@
 package backend
 
 type AppSettings struct {
-	BaseURL              string           `json:"baseUrl"`
-	ManagementToken      string           `json:"managementToken"`
-	Locale               string           `json:"locale"`
-	DetailedLogs         bool             `json:"detailedLogs"`
-	TargetType           string           `json:"targetType"`
-	Provider             string           `json:"provider"`
-	ScanStrategy         string           `json:"scanStrategy"`
-	ScanBatchSize        int              `json:"scanBatchSize"`
-	SkipKnown401         bool             `json:"skipKnown401"`
-	ProbeWorkers         int              `json:"probeWorkers"`
-	ActionWorkers        int              `json:"actionWorkers"`
-	QuotaWorkers         int              `json:"quotaWorkers"`
-	TimeoutSeconds       int              `json:"timeoutSeconds"`
-	Retries              int              `json:"retries"`
-	UserAgent            string           `json:"userAgent"`
-	QuotaAction          string           `json:"quotaAction"`
-	QuotaCheckFree       bool             `json:"quotaCheckFree"`
-	QuotaCheckPlus       bool             `json:"quotaCheckPlus"`
-	QuotaCheckPro        bool             `json:"quotaCheckPro"`
-	QuotaCheckTeam       bool             `json:"quotaCheckTeam"`
-	QuotaCheckBusiness   bool             `json:"quotaCheckBusiness"`
-	QuotaCheckEnterprise bool             `json:"quotaCheckEnterprise"`
-	QuotaFreeMaxAccounts int              `json:"quotaFreeMaxAccounts"`
-	QuotaAutoRefreshEnabled bool          `json:"quotaAutoRefreshEnabled"`
-	QuotaAutoRefreshCron    string        `json:"quotaAutoRefreshCron"`
-	Delete401            bool             `json:"delete401"`
-	AutoReenable         bool             `json:"autoReenable"`
-	ExportDirectory      string           `json:"exportDirectory"`
-	Schedule             ScheduleSettings `json:"schedule"`
+	BaseURL                 string           `json:"baseUrl"`
+	ManagementToken         string           `json:"managementToken"`
+	Locale                  string           `json:"locale"`
+	DetailedLogs            bool             `json:"detailedLogs"`
+	TargetType              string           `json:"targetType"`
+	Provider                string           `json:"provider"`
+	ScanStrategy            string           `json:"scanStrategy"`
+	ScanBatchSize           int              `json:"scanBatchSize"`
+	SkipKnown401            bool             `json:"skipKnown401"`
+	ProbeWorkers            int              `json:"probeWorkers"`
+	ActionWorkers           int              `json:"actionWorkers"`
+	QuotaWorkers            int              `json:"quotaWorkers"`
+	TimeoutSeconds          int              `json:"timeoutSeconds"`
+	Retries                 int              `json:"retries"`
+	UserAgent               string           `json:"userAgent"`
+	QuotaAction             string           `json:"quotaAction"`
+	QuotaCheckFree          bool             `json:"quotaCheckFree"`
+	QuotaCheckPlus          bool             `json:"quotaCheckPlus"`
+	QuotaCheckPro           bool             `json:"quotaCheckPro"`
+	QuotaCheckTeam          bool             `json:"quotaCheckTeam"`
+	QuotaCheckBusiness      bool             `json:"quotaCheckBusiness"`
+	QuotaCheckEnterprise    bool             `json:"quotaCheckEnterprise"`
+	QuotaFreeMaxAccounts    int              `json:"quotaFreeMaxAccounts"`
+	QuotaAutoRefreshEnabled bool             `json:"quotaAutoRefreshEnabled"`
+	QuotaAutoRefreshCron    string           `json:"quotaAutoRefreshCron"`
+	Delete401               bool             `json:"delete401"`
+	AutoReenable            bool             `json:"autoReenable"`
+	ExportDirectory         string           `json:"exportDirectory"`
+	Schedule                ScheduleSettings `json:"schedule"`
 }
 
 type ScheduleSettings struct {
@@ -133,6 +133,26 @@ type QuotaBucketSummary struct {
 	FailedCount           int      `json:"failedCount"`
 }
 
+type QuotaBucketDetail struct {
+	Supported        bool     `json:"supported"`
+	RemainingPercent *float64 `json:"remainingPercent"`
+	ResetAt          string   `json:"resetAt"`
+}
+
+type CodexQuotaAccountDetail struct {
+	Name             string            `json:"name"`
+	Email            string            `json:"email"`
+	PlanType         string            `json:"planType"`
+	Provider         string            `json:"provider"`
+	Success          bool              `json:"success"`
+	Error            string            `json:"error"`
+	FetchedAt        string            `json:"fetchedAt"`
+	EarliestResetAt  string            `json:"earliestResetAt"`
+	FiveHour         QuotaBucketDetail `json:"fiveHour"`
+	Weekly           QuotaBucketDetail `json:"weekly"`
+	CodeReviewWeekly QuotaBucketDetail `json:"codeReviewWeekly"`
+}
+
 type CodexPlanQuotaSummary struct {
 	PlanType         string             `json:"planType"`
 	AccountCount     int                `json:"accountCount"`
@@ -142,11 +162,12 @@ type CodexPlanQuotaSummary struct {
 }
 
 type CodexQuotaSnapshot struct {
-	Plans              []CodexPlanQuotaSummary `json:"plans"`
-	FetchedAt          string                  `json:"fetchedAt"`
-	TotalAccounts      int                     `json:"totalAccounts"`
-	SuccessfulAccounts int                     `json:"successfulAccounts"`
-	FailedAccounts     int                     `json:"failedAccounts"`
+	Plans              []CodexPlanQuotaSummary   `json:"plans"`
+	Accounts           []CodexQuotaAccountDetail `json:"accounts"`
+	FetchedAt          string                    `json:"fetchedAt"`
+	TotalAccounts      int                       `json:"totalAccounts"`
+	SuccessfulAccounts int                       `json:"successfulAccounts"`
+	FailedAccounts     int                       `json:"failedAccounts"`
 }
 
 type AccountPage struct {

@@ -408,6 +408,9 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 	if snapshot.TotalAccounts != 3 || snapshot.SuccessfulAccounts != 2 || snapshot.FailedAccounts != 1 {
 		t.Fatalf("unexpected snapshot counters: %+v", snapshot)
 	}
+	if len(snapshot.Accounts) != 3 {
+		t.Fatalf("expected three account details, got %d", len(snapshot.Accounts))
+	}
 	if len(snapshot.Plans) != 2 {
 		t.Fatalf("expected two plan cards, got %d", len(snapshot.Plans))
 	}
@@ -438,6 +441,33 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 	}
 	if teamPlan.FiveHour.TotalRemainingPercent == nil || *teamPlan.FiveHour.TotalRemainingPercent != 75 {
 		t.Fatalf("unexpected team five-hour remaining: %+v", teamPlan.FiveHour)
+	}
+
+	freeAccount := snapshot.Accounts[0]
+	if freeAccount.PlanType != "free" || !freeAccount.Success || freeAccount.FiveHour.Supported {
+		t.Fatalf("unexpected free account detail: %+v", freeAccount)
+	}
+	if freeAccount.EarliestResetAt != "2026-03-18T00:00:00Z" {
+		t.Fatalf("unexpected free earliest reset: %+v", freeAccount)
+	}
+
+	teamAccount := snapshot.Accounts[1]
+	if teamAccount.PlanType != "team" || !teamAccount.Success {
+		t.Fatalf("unexpected team account detail: %+v", teamAccount)
+	}
+	if teamAccount.FiveHour.RemainingPercent == nil || *teamAccount.FiveHour.RemainingPercent != 75 {
+		t.Fatalf("unexpected team five-hour detail: %+v", teamAccount.FiveHour)
+	}
+	if teamAccount.EarliestResetAt != "2026-03-12T05:00:00Z" {
+		t.Fatalf("unexpected team earliest reset: %+v", teamAccount)
+	}
+
+	failedAccount := snapshot.Accounts[2]
+	if failedAccount.Success || failedAccount.Error == "" {
+		t.Fatalf("unexpected failed account detail: %+v", failedAccount)
+	}
+	if failedAccount.FiveHour.RemainingPercent != nil || failedAccount.Weekly.RemainingPercent != nil || failedAccount.CodeReviewWeekly.RemainingPercent != nil {
+		t.Fatalf("failed account should not contain quota values: %+v", failedAccount)
 	}
 }
 
@@ -490,6 +520,137 @@ func TestParseQuotaBucketResultRejectsAmbiguousWeeklyCandidate(t *testing.T) {
 	}
 	if result.weekly != nil {
 		t.Fatalf("expected ambiguous weekly bucket to be ignored, got %+v", result.weekly)
+	}
+}
+
+func TestParseQuotaBucketResultSupportsPrimarySecondaryRateLimitWindows(t *testing.T) {
+	payload := map[string]any{
+		"plan_type": "team",
+		"rate_limit": map[string]any{
+			"primary_window": map[string]any{
+				"used_percent":        5,
+				"reset_at":            "2026-03-13T09:22:56Z",
+				"reset_after_seconds": 5633,
+			},
+			"secondary_window": map[string]any{
+				"used_percent":        57,
+				"reset_at":            "2026-03-18T12:33:46Z",
+				"reset_after_seconds": 449083,
+			},
+		},
+		"code_review_rate_limit": map[string]any{
+			"primary_window": map[string]any{
+				"used_percent":        0,
+				"reset_at":            "2026-03-20T07:49:03Z",
+				"reset_after_seconds": 604800,
+			},
+		},
+	}
+
+	result, err := parseQuotaBucketResult(payload)
+	if err != nil {
+		t.Fatalf("parseQuotaBucketResult: %v", err)
+	}
+	if result.fiveHour == nil || result.fiveHour.resetAt != "2026-03-13T09:22:56Z" || result.fiveHour.remainingPercent != 95 {
+		t.Fatalf("unexpected primary-window five-hour bucket: %+v", result.fiveHour)
+	}
+	if result.weekly == nil || result.weekly.resetAt != "2026-03-18T12:33:46Z" || result.weekly.remainingPercent != 43 {
+		t.Fatalf("unexpected secondary-window weekly bucket: %+v", result.weekly)
+	}
+	if result.codeReviewWeekly == nil || result.codeReviewWeekly.resetAt != "2026-03-20T07:49:03Z" || result.codeReviewWeekly.remainingPercent != 100 {
+		t.Fatalf("unexpected code-review bucket: %+v", result.codeReviewWeekly)
+	}
+}
+
+func TestParseQuotaBucketResultMapsFreePrimaryWindowToWeekly(t *testing.T) {
+	payload := map[string]any{
+		"plan_type": "free",
+		"rate_limit": map[string]any{
+			"primary_window": map[string]any{
+				"used_percent": 9,
+				"reset_at":     "2026-03-19T09:29:20Z",
+			},
+		},
+		"code_review_rate_limit": map[string]any{
+			"primary_window": map[string]any{
+				"used_percent": 0,
+				"reset_at":     "2026-03-20T08:41:01Z",
+			},
+		},
+	}
+
+	result, err := parseQuotaBucketResult(payload)
+	if err != nil {
+		t.Fatalf("parseQuotaBucketResult: %v", err)
+	}
+	if result.fiveHour != nil {
+		t.Fatalf("free primary window must not be classified as five-hour: %+v", result.fiveHour)
+	}
+	if result.weekly == nil || result.weekly.resetAt != "2026-03-19T09:29:20Z" || result.weekly.remainingPercent != 91 {
+		t.Fatalf("unexpected free weekly bucket: %+v", result.weekly)
+	}
+	if result.codeReviewWeekly == nil || result.codeReviewWeekly.resetAt != "2026-03-20T08:41:01Z" || result.codeReviewWeekly.remainingPercent != 100 {
+		t.Fatalf("unexpected free code-review bucket: %+v", result.codeReviewWeekly)
+	}
+}
+
+func TestNormalizeQuotaBucketResultZeroesFiveHourWhenWeeklyIsEmpty(t *testing.T) {
+	result := normalizeQuotaBucketResult(quotaBucketResult{
+		fiveHour: &quotaBucketValue{
+			remainingPercent: 75,
+			resetAt:          "2026-03-16T04:45:00Z",
+		},
+		weekly: &quotaBucketValue{
+			remainingPercent: 0,
+			resetAt:          "2026-03-17T13:01:00Z",
+		},
+		codeReviewWeekly: &quotaBucketValue{
+			remainingPercent: 100,
+			resetAt:          "2026-03-23T00:41:00Z",
+		},
+	})
+
+	if result.fiveHour == nil {
+		t.Fatal("expected normalized five-hour bucket")
+	}
+	if result.fiveHour.remainingPercent != 0 {
+		t.Fatalf("expected five-hour remaining to be zeroed, got %+v", result.fiveHour)
+	}
+	if result.fiveHour.resetAt != "2026-03-17T13:01:00Z" {
+		t.Fatalf("expected five-hour reset to follow weekly reset, got %+v", result.fiveHour)
+	}
+	if result.weekly == nil || result.weekly.remainingPercent != 0 {
+		t.Fatalf("expected weekly bucket to remain unchanged, got %+v", result.weekly)
+	}
+}
+
+func TestQuotaBucketLogSummaryIncludesBucketStates(t *testing.T) {
+	summary := quotaBucketLogSummary("en-US", "team-a", "team", quotaBucketResult{
+		fiveHour: &quotaBucketValue{
+			remainingPercent: 75,
+			resetAt:          "2026-03-13T20:17:00Z",
+		},
+		codeReviewWeekly: &quotaBucketValue{
+			remainingPercent: 100,
+			resetAt:          "2026-03-20T15:17:00Z",
+		},
+	})
+
+	expectedSnippets := []string{
+		"Bucket parse for team-a (team)",
+		"5h=success 75% @ 2026-03-13T20:17:00Z",
+		"weekly=failed",
+		"review=success 100% @ 2026-03-20T15:17:00Z",
+	}
+	for _, snippet := range expectedSnippets {
+		if !strings.Contains(summary, snippet) {
+			t.Fatalf("expected summary %q to contain %q", summary, snippet)
+		}
+	}
+
+	freeSummary := quotaBucketLogSummary("en-US", "free-a", "free", quotaBucketResult{})
+	if !strings.Contains(freeSummary, "5h=unsupported") {
+		t.Fatalf("expected free summary to mark five-hour bucket unsupported, got %q", freeSummary)
 	}
 }
 

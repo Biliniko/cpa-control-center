@@ -18,10 +18,12 @@ You connect it to a CPA instance with a `Base URL` and a `Management Token`, the
 - Native desktop app built with Wails, Go, Vue 3, and TypeScript
 - Only requires `Base URL` and `Management Token`
 - Inventory-first startup flow for large pools
+- Dedicated Codex quota workspace with plan overview, account matrix, recovery board, and detail inspection
 - Server-paged accounts and scan details
 - Unified state model: `Pending`, `Normal`, `401 Invalid`, `Quota Limited`, `Recovered`, `Error`
 - Scan modes: `Full` and `Incremental`
 - Built-in in-app scheduler for automatic `Scan` or `Maintain` tasks
+- Separate in-app quota auto-refresh cron for recurring Codex quota snapshots while the app stays open
 - Live task logs and scan history
 - CSV / JSON export for `401 Invalid` and `Quota Limited`
 - Built-in bilingual interface: English and Simplified Chinese
@@ -154,7 +156,18 @@ The app keeps:
 
 If **Detailed Logs** is enabled, the task log also shows per-account scan and maintenance details.
 
-### 6. Schedule Automatic Tasks
+### 6. Inspect Codex Quotas
+
+The quota workspace is no longer limited to pooled plan cards. It now includes:
+
+- plan-level overview cards for pooled quota health
+- an account matrix for successful and failed quota snapshots
+- a recovery board that can group accounts by earliest, `5h`, or weekly reset windows
+- an account detail panel for inspecting bucket-level state and failure reasons
+
+Quota refreshes can be triggered manually from the quota page, and the page also supports a dedicated quota auto-refresh cron while the app remains open.
+
+### 7. Schedule Automatic Tasks
 
 The app includes one built-in scheduler:
 
@@ -170,7 +183,7 @@ Important scope limits:
 - missed runs are not replayed after restart
 - the first version does not support multiple schedules or OS-level task integration
 
-### 7. Export Problem Sets
+### 8. Export Problem Sets
 
 You can export:
 
@@ -190,6 +203,14 @@ Formats:
 - recent scan history
 - paginated scan detail drawer
 - one-click scan and maintenance actions
+
+### Codex Quotas
+
+- plan overview cards grouped by quota plan
+- account matrix with result filters, quota sorting, and row-based pagination
+- recovery board with selectable reset buckets (`Earliest`, `5h`, `Weekly`)
+- account detail drawer for bucket status, reset timing, and failure reasons
+- manual refresh plus optional in-app quota auto-refresh cron
 
 ### Accounts
 

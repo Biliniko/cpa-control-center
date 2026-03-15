@@ -144,6 +144,26 @@ export interface QuotaBucketSummary {
   failedCount: number
 }
 
+export interface QuotaBucketDetail {
+  supported: boolean
+  remainingPercent?: number | null
+  resetAt: string
+}
+
+export interface CodexQuotaAccountDetail {
+  name: string
+  email: string
+  planType: string
+  provider: string
+  success: boolean
+  error: string
+  fetchedAt: string
+  earliestResetAt: string
+  fiveHour: QuotaBucketDetail
+  weekly: QuotaBucketDetail
+  codeReviewWeekly: QuotaBucketDetail
+}
+
 export interface CodexPlanQuotaSummary {
   planType: string
   accountCount: number
@@ -154,11 +174,17 @@ export interface CodexPlanQuotaSummary {
 
 export interface CodexQuotaSnapshot {
   plans: CodexPlanQuotaSummary[]
+  accounts: CodexQuotaAccountDetail[]
   fetchedAt: string
   totalAccounts: number
   successfulAccounts: number
   failedAccounts: number
 }
+
+export type QuotaViewMode = 'overview' | 'matrix' | 'recovery'
+export type QuotaResultFilter = 'all' | 'success' | 'failed'
+export type QuotaSortMode = 'plan' | 'total' | 'fiveHour' | 'weekly' | 'reset' | 'name'
+export type QuotaRecoveryMode = 'earliest' | 'fiveHour' | 'weekly'
 
 export interface AccountPage {
   records: AccountRecord[]
