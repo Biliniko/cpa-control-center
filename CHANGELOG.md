@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## v1.5.0
+
 ### Highlights
 
 - Rebuilt the Codex quota page into a dedicated workspace with three coordinated views: plan overview cards, an account matrix, and a recovery board.
@@ -16,7 +18,6 @@ All notable changes to this project will be documented in this file.
 
 - The quota workspace is still desktop-first and tuned for dense operational review rather than a lightweight mobile-style card feed.
 - Quota auto-refresh only runs while the application is open; it is not an OS-level background job.
-- This documentation update does not create a release tag and does not publish a GitHub release.
 
 ## v1.4.0
 
