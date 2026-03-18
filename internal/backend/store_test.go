@@ -277,3 +277,47 @@ func TestLoadSettingsDefaultsSkipKnown401WhenMissingFromLegacyFile(t *testing.T)
 		t.Fatalf("expected legacy settings to default skipKnown401 to true")
 	}
 }
+
+func TestStoreCodexQuotaSnapshotRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	snapshot := CodexQuotaSnapshot{
+		Source:          "scan",
+		Coverage:        "partial",
+		CoveredAccounts: 2,
+		FetchedAt:       nowISO(),
+		TotalAccounts:   3,
+		Accounts: []CodexQuotaAccountDetail{
+			{
+				Name:      "codex-one.json",
+				PlanType:  "pro",
+				Provider:  "codex",
+				Success:   true,
+				FetchedAt: nowISO(),
+			},
+		},
+	}
+	if err := store.SaveCodexQuotaSnapshot(snapshot); err != nil {
+		t.Fatalf("SaveCodexQuotaSnapshot: %v", err)
+	}
+
+	loaded, ok, err := store.LoadCodexQuotaSnapshot()
+	if err != nil {
+		t.Fatalf("LoadCodexQuotaSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected saved codex quota snapshot to exist")
+	}
+	if loaded.Source != snapshot.Source || loaded.Coverage != snapshot.Coverage || loaded.CoveredAccounts != snapshot.CoveredAccounts {
+		t.Fatalf("unexpected loaded snapshot metadata: %+v", loaded)
+	}
+	if len(loaded.Accounts) != 1 || loaded.Accounts[0].Name != snapshot.Accounts[0].Name {
+		t.Fatalf("unexpected loaded snapshot accounts: %+v", loaded.Accounts)
+	}
+}

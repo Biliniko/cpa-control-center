@@ -104,6 +104,10 @@ const schedulerMessage = computed(() => (
 async function testOnly() {
   try {
     const result = await settingsStore.testConnection()
+    if (!result) {
+      ElMessage.success(t('settings.testReachableBasic', { message: t('common.notAvailable') }))
+      return
+    }
     ElMessage.success(
       result.accountCount > 0
         ? t('settings.testReachable', { message: result.message, count: result.accountCount })
@@ -118,6 +122,10 @@ async function testAndSave() {
   try {
     const result = await settingsStore.testAndSave()
     tasksStore.scheduleInventorySync()
+    if (!result) {
+      ElMessage.success(t('settings.savedReachableSyncingBasic'))
+      return
+    }
     ElMessage.success(
       result.accountCount > 0
         ? t('settings.savedReachableSyncing', { count: result.accountCount })

@@ -48,16 +48,21 @@ export const useQuotasStore = defineStore('quotasStore', {
     ),
   },
   actions: {
+    applySnapshot(snapshot: CodexQuotaSnapshot) {
+      this.snapshot = snapshot
+      this.error = ''
+      this.hasRequested = true
+      if (!snapshot.accounts.some((account) => account.name === this.selectedAccountName)) {
+        this.selectedAccountName = ''
+      }
+    },
     async refreshSnapshot() {
       this.loading = true
       this.error = ''
       this.hasRequested = true
       try {
         const snapshot = await GetCodexQuotaSnapshot() as unknown as CodexQuotaSnapshot
-        this.snapshot = snapshot
-        if (!snapshot.accounts.some((account) => account.name === this.selectedAccountName)) {
-          this.selectedAccountName = ''
-        }
+        this.applySnapshot(snapshot)
         return snapshot
       } catch (error) {
         const message = toErrorMessage(error)

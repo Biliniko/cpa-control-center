@@ -164,6 +164,9 @@ type CodexPlanQuotaSummary struct {
 type CodexQuotaSnapshot struct {
 	Plans              []CodexPlanQuotaSummary   `json:"plans"`
 	Accounts           []CodexQuotaAccountDetail `json:"accounts"`
+	Source             string                    `json:"source"`
+	Coverage           string                    `json:"coverage"`
+	CoveredAccounts    int                       `json:"coveredAccounts"`
 	FetchedAt          string                    `json:"fetchedAt"`
 	TotalAccounts      int                       `json:"totalAccounts"`
 	SuccessfulAccounts int                       `json:"successfulAccounts"`

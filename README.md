@@ -124,7 +124,8 @@ When you click **Scan Now**, the app:
 2. applies `targetType` and `provider` filters
 3. probes matching accounts concurrently
 4. writes the latest snapshot
-5. records a scan-history entry
+5. updates the latest Codex quota snapshot for the probed accounts without issuing a separate quota refresh
+6. records a scan-history entry
 
 Two scan strategies are available:
 
@@ -165,7 +166,12 @@ The quota workspace is no longer limited to pooled plan cards. It now includes:
 - a recovery board that can group accounts by earliest, `5h`, or weekly reset windows
 - an account detail panel for inspecting bucket-level state and failure reasons
 
-Quota refreshes can be triggered manually from the quota page, and the page also supports a dedicated quota auto-refresh cron while the app remains open.
+Quota snapshots can be updated in four ways:
+
+- automatically after scans
+- automatically after maintenance runs
+- manually from the quota page
+- through the dedicated in-app quota auto-refresh cron while the app remains open
 
 ### 7. Schedule Automatic Tasks
 

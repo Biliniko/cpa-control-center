@@ -111,24 +111,29 @@ func (b *Backend) GetCodexQuotaSnapshot() (CodexQuotaSnapshot, error) {
 	records := b.selectQuotaRecords(settings, files, timestamp)
 
 	if len(records) == 0 {
-		b.emitProgress("quota", "complete", 0, 0, finishMessage, true)
-		return CodexQuotaSnapshot{
+		snapshot := CodexQuotaSnapshot{
 			Plans:              nil,
 			Accounts:           nil,
+			Source:             "quota_refresh",
+			Coverage:           "full",
+			CoveredAccounts:    0,
 			FetchedAt:          timestamp,
 			TotalAccounts:      0,
 			SuccessfulAccounts: 0,
 			FailedAccounts:     0,
-		}, nil
+		}
+		if err := b.persistCodexQuotaSnapshot(snapshot); err != nil {
+			status = "failed"
+			finishMessage = err.Error()
+			b.emitLog("quota", "error", finishMessage)
+			return CodexQuotaSnapshot{}, err
+		}
+		b.emitProgress("quota", "complete", 0, 0, finishMessage, true)
+		return snapshot, nil
 	}
 
 	b.emitLog("quota", "info", msg(settings.Locale, "task.quota.refreshing", len(records)))
 	b.emitProgress("quota", "query", 0, len(records), msg(settings.Locale, "task.quota.querying_account", records[0].Name), false)
-
-	accumulators := map[string]*planQuotaAccumulator{}
-	accountDetails := make([]CodexQuotaAccountDetail, 0, len(records))
-	var successfulAccounts int
-	var failedAccounts int
 
 	outcomes, err := b.fetchQuotaOutcomes(ctx, settings, records)
 	if err != nil {
@@ -137,59 +142,12 @@ func (b *Backend) GetCodexQuotaSnapshot() (CodexQuotaSnapshot, error) {
 		b.emitLog("quota", "warning", finishMessage)
 		return CodexQuotaSnapshot{}, err
 	}
-
-	for _, outcome := range outcomes {
-		planType := outcome.planType
-		accumulator := ensurePlanAccumulator(accumulators, planType)
-		accumulator.accountCount++
-		if outcome.err != nil {
-			failedAccounts++
-			markQuotaAccountFailure(accumulator)
-			accountDetails = append(accountDetails, buildQuotaAccountDetail(outcome, timestamp))
-			continue
-		}
-		if outcome.usagePlanType != "" && outcome.usagePlanType != planType {
-			accumulator.accountCount--
-			pruneEmptyPlanAccumulator(accumulators, accumulator)
-			accumulator = ensurePlanAccumulator(accumulators, outcome.usagePlanType)
-			accumulator.accountCount++
-			planType = outcome.usagePlanType
-		}
-
-		outcome.result = normalizeQuotaBucketResult(outcome.result)
-		successfulAccounts++
-		applyQuotaBucketResult(accumulator, outcome.result)
-		accountDetails = append(accountDetails, buildQuotaAccountDetail(outcome, timestamp))
-	}
-
-	plans := make([]CodexPlanQuotaSummary, 0, len(accumulators))
-	for _, key := range sortedPlanKeys(accumulators) {
-		plans = append(plans, buildPlanQuotaSummary(accumulators[key]))
-	}
-	sort.Slice(accountDetails, func(i, j int) bool {
-		leftPlan := normalizeQuotaPlanType(accountDetails[i].PlanType)
-		rightPlan := normalizeQuotaPlanType(accountDetails[j].PlanType)
-		leftRank, leftKnown := planOrder[leftPlan]
-		rightRank, rightKnown := planOrder[rightPlan]
-		switch {
-		case leftKnown && rightKnown && leftRank != rightRank:
-			return leftRank < rightRank
-		case leftKnown != rightKnown:
-			return leftKnown
-		case accountDetails[i].Success != accountDetails[j].Success:
-			return accountDetails[i].Success
-		default:
-			return accountDetails[i].Name < accountDetails[j].Name
-		}
-	})
-
-	snapshot := CodexQuotaSnapshot{
-		Plans:              plans,
-		Accounts:           accountDetails,
-		FetchedAt:          timestamp,
-		TotalAccounts:      successfulAccounts + failedAccounts,
-		SuccessfulAccounts: successfulAccounts,
-		FailedAccounts:     failedAccounts,
+	snapshot := buildCodexQuotaSnapshotFromOutcomes(outcomes, timestamp, "quota_refresh", "full", len(records))
+	if err := b.persistCodexQuotaSnapshot(snapshot); err != nil {
+		status = "failed"
+		finishMessage = err.Error()
+		b.emitLog("quota", "error", finishMessage)
+		return CodexQuotaSnapshot{}, err
 	}
 	finishMessage = msg(settings.Locale, "task.quota.completed", snapshot.TotalAccounts, snapshot.SuccessfulAccounts, snapshot.FailedAccounts)
 	b.emitProgress("quota", "complete", 1, 1, finishMessage, true)
@@ -249,6 +207,35 @@ func quotaPlanEnabled(settings AppSettings, planType string) bool {
 	}
 }
 
+func quotaRecordEligible(settings AppSettings, record AccountRecord) bool {
+	if !strings.EqualFold(record.Provider, "codex") && !strings.EqualFold(record.Type, "codex") {
+		return false
+	}
+	return quotaPlanEnabled(settings, normalizeQuotaPlanType(record.PlanType))
+}
+
+func selectQuotaRecordsFromAccounts(settings AppSettings, records []AccountRecord) []AccountRecord {
+	selected := make([]AccountRecord, 0, len(records))
+	freeSelected := 0
+	freeLimit := settings.QuotaFreeMaxAccounts
+
+	for _, record := range records {
+		if !quotaRecordEligible(settings, record) {
+			continue
+		}
+		planType := normalizeQuotaPlanType(record.PlanType)
+		if planType == "free" && freeLimit >= 0 {
+			if freeSelected >= freeLimit {
+				continue
+			}
+			freeSelected++
+		}
+		selected = append(selected, record)
+	}
+
+	return selected
+}
+
 func (b *Backend) fetchQuotaOutcomes(ctx context.Context, settings AppSettings, records []AccountRecord) ([]quotaFetchOutcome, error) {
 	workers := settings.QuotaWorkers
 	if workers <= 0 {
@@ -279,18 +266,8 @@ func (b *Backend) fetchQuotaOutcomes(ctx context.Context, settings AppSettings, 
 						return
 					}
 
-					outcome := quotaFetchOutcome{
-						record:   record,
-						planType: normalizeQuotaPlanType(record.PlanType),
-					}
-
-					usage, err := b.client.FetchWhamUsage(ctx, settings, record)
-					if err != nil {
-						outcome.err = err
-					} else {
-						outcome.usagePlanType = normalizeQuotaPlanType(stringValue(usage["plan_type"]))
-						outcome.result, outcome.err = parseQuotaBucketResult(usage)
-					}
+					probe := b.client.ProbeUsageResult(ctx, settings, record)
+					outcome := quotaOutcomeFromUsageProbe(probe)
 
 					current := int(atomic.AddInt64(&completed, 1))
 					if outcome.err != nil {
@@ -336,6 +313,201 @@ func (b *Backend) fetchQuotaOutcomes(ctx context.Context, settings AppSettings, 
 		return nil, ctx.Err()
 	}
 	return results, nil
+}
+
+func quotaOutcomeFromUsageProbe(probe UsageProbeResult) quotaFetchOutcome {
+	outcome := quotaFetchOutcome{
+		record:   probe.Record,
+		planType: normalizeQuotaPlanType(probe.Record.PlanType),
+	}
+	if probe.UsageError != nil {
+		outcome.err = probe.UsageError
+		return outcome
+	}
+
+	outcome.usagePlanType = normalizeQuotaPlanType(stringValue(probe.Usage["plan_type"]))
+	outcome.result, outcome.err = parseQuotaBucketResult(probe.Usage)
+	return outcome
+}
+
+func (b *Backend) buildCodexQuotaSnapshotFromUsageProbes(settings AppSettings, records []AccountRecord, probes []UsageProbeResult, fetchedAt string, source string) (CodexQuotaSnapshot, bool, error) {
+	eligibleRecords := selectQuotaRecordsFromAccounts(settings, records)
+	coveredQuotaNames := make(map[string]struct{}, len(probes))
+	for _, probe := range probes {
+		if quotaRecordEligible(settings, probe.Record) {
+			coveredQuotaNames[probe.Record.Name] = struct{}{}
+		}
+	}
+	if len(eligibleRecords) == 0 {
+		if len(coveredQuotaNames) == 0 {
+			return CodexQuotaSnapshot{}, false, nil
+		}
+		return CodexQuotaSnapshot{
+			Plans:              nil,
+			Accounts:           nil,
+			Source:             source,
+			Coverage:           "full",
+			CoveredAccounts:    0,
+			FetchedAt:          fetchedAt,
+			TotalAccounts:      0,
+			SuccessfulAccounts: 0,
+			FailedAccounts:     0,
+		}, true, nil
+	}
+
+	eligibleNames := make(map[string]AccountRecord, len(eligibleRecords))
+	for _, record := range eligibleRecords {
+		eligibleNames[record.Name] = record
+	}
+
+	outcomes := make([]quotaFetchOutcome, 0, len(probes))
+	coveredNames := make(map[string]struct{}, len(probes))
+	for _, probe := range probes {
+		if _, ok := eligibleNames[probe.Record.Name]; !ok {
+			continue
+		}
+		outcomes = append(outcomes, quotaOutcomeFromUsageProbe(probe))
+		coveredNames[probe.Record.Name] = struct{}{}
+	}
+	if len(outcomes) == 0 {
+		return CodexQuotaSnapshot{}, false, nil
+	}
+
+	coverage := "partial"
+	if len(coveredNames) == len(eligibleRecords) {
+		coverage = "full"
+	}
+
+	snapshot := buildCodexQuotaSnapshotFromOutcomes(outcomes, fetchedAt, source, coverage, len(coveredNames))
+	if coverage == "full" {
+		return snapshot, true, nil
+	}
+
+	previous, ok, err := b.store.LoadCodexQuotaSnapshot()
+	if err != nil {
+		return CodexQuotaSnapshot{}, false, err
+	}
+	if !ok {
+		return snapshot, true, nil
+	}
+	return mergeCodexQuotaSnapshots(previous, snapshot, eligibleRecords), true, nil
+}
+
+func mergeCodexQuotaSnapshots(previous CodexQuotaSnapshot, delta CodexQuotaSnapshot, eligibleRecords []AccountRecord) CodexQuotaSnapshot {
+	eligibleByName := make(map[string]AccountRecord, len(eligibleRecords))
+	for _, record := range eligibleRecords {
+		eligibleByName[record.Name] = record
+	}
+
+	detailsByName := make(map[string]CodexQuotaAccountDetail, len(eligibleRecords))
+	for _, detail := range previous.Accounts {
+		record, ok := eligibleByName[detail.Name]
+		if !ok {
+			continue
+		}
+		if record.Email != "" {
+			detail.Email = record.Email
+		}
+		if record.Provider != "" {
+			detail.Provider = record.Provider
+		}
+		if record.PlanType != "" {
+			detail.PlanType = record.PlanType
+		}
+		detailsByName[detail.Name] = detail
+	}
+	for _, detail := range delta.Accounts {
+		detailsByName[detail.Name] = detail
+	}
+
+	details := make([]CodexQuotaAccountDetail, 0, len(detailsByName))
+	for _, detail := range detailsByName {
+		details = append(details, detail)
+	}
+	return buildCodexQuotaSnapshotFromDetails(details, delta.FetchedAt, delta.Source, delta.Coverage, delta.CoveredAccounts)
+}
+
+func buildCodexQuotaSnapshotFromOutcomes(outcomes []quotaFetchOutcome, fetchedAt string, source string, coverage string, coveredAccounts int) CodexQuotaSnapshot {
+	details := make([]CodexQuotaAccountDetail, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		details = append(details, buildQuotaAccountDetail(outcome, fetchedAt))
+	}
+	return buildCodexQuotaSnapshotFromDetails(details, fetchedAt, source, coverage, coveredAccounts)
+}
+
+func buildCodexQuotaSnapshotFromDetails(details []CodexQuotaAccountDetail, fetchedAt string, source string, coverage string, coveredAccounts int) CodexQuotaSnapshot {
+	accumulators := map[string]*planQuotaAccumulator{}
+	var successfulAccounts int
+	var failedAccounts int
+
+	sort.Slice(details, func(i, j int) bool {
+		leftPlan := normalizeQuotaPlanType(details[i].PlanType)
+		rightPlan := normalizeQuotaPlanType(details[j].PlanType)
+		leftRank, leftKnown := planOrder[leftPlan]
+		rightRank, rightKnown := planOrder[rightPlan]
+		switch {
+		case leftKnown && rightKnown && leftRank != rightRank:
+			return leftRank < rightRank
+		case leftKnown != rightKnown:
+			return leftKnown
+		case details[i].Success != details[j].Success:
+			return details[i].Success
+		default:
+			return details[i].Name < details[j].Name
+		}
+	})
+
+	for _, detail := range details {
+		planType := normalizeQuotaPlanType(detail.PlanType)
+		accumulator := ensurePlanAccumulator(accumulators, planType)
+		accumulator.accountCount++
+		if !detail.Success {
+			failedAccounts++
+			markQuotaAccountFailure(accumulator)
+			continue
+		}
+		successfulAccounts++
+		applyQuotaBucketResult(accumulator, quotaBucketResult{
+			fiveHour:         quotaBucketValueFromDetail(detail.FiveHour),
+			weekly:           quotaBucketValueFromDetail(detail.Weekly),
+			codeReviewWeekly: quotaBucketValueFromDetail(detail.CodeReviewWeekly),
+		})
+	}
+
+	plans := make([]CodexPlanQuotaSummary, 0, len(accumulators))
+	for _, key := range sortedPlanKeys(accumulators) {
+		plans = append(plans, buildPlanQuotaSummary(accumulators[key]))
+	}
+
+	return CodexQuotaSnapshot{
+		Plans:              plans,
+		Accounts:           details,
+		Source:             source,
+		Coverage:           coverage,
+		CoveredAccounts:    coveredAccounts,
+		FetchedAt:          fetchedAt,
+		TotalAccounts:      successfulAccounts + failedAccounts,
+		SuccessfulAccounts: successfulAccounts,
+		FailedAccounts:     failedAccounts,
+	}
+}
+
+func quotaBucketValueFromDetail(detail QuotaBucketDetail) *quotaBucketValue {
+	if detail.RemainingPercent == nil {
+		return nil
+	}
+	return &quotaBucketValue{
+		remainingPercent: *detail.RemainingPercent,
+		resetAt:          detail.ResetAt,
+	}
+}
+
+func (b *Backend) persistCodexQuotaSnapshot(snapshot CodexQuotaSnapshot) error {
+	if err := b.store.SaveCodexQuotaSnapshot(snapshot); err != nil {
+		return err
+	}
+	b.emitQuotaSnapshot(snapshot)
+	return nil
 }
 
 func ensurePlanAccumulator(accumulators map[string]*planQuotaAccumulator, planType string) *planQuotaAccumulator {

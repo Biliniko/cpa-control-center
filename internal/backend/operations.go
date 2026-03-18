@@ -26,7 +26,7 @@ func (b *Backend) RunScan() (ScanSummary, error) {
 	}
 	defer b.endTask()
 
-	summary, _, err := b.runScan(ctx, "scan", settings)
+	summary, _, _, err := b.runScan(ctx, "scan", settings)
 	status := summary.Status
 	if status == "" {
 		status = taskStatus(err)
@@ -442,10 +442,10 @@ func (b *Backend) GetScanDetailsPage(runID int64, page int, pageSize int) (ScanD
 	return b.store.GetScanDetailsPage(runID, page, pageSize)
 }
 
-func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings) (ScanSummary, []AccountRecord, error) {
+func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings) (ScanSummary, []AccountRecord, []UsageProbeResult, error) {
 	runID, err := b.store.StartScanRun(settings)
 	if err != nil {
-		return ScanSummary{}, nil, err
+		return ScanSummary{}, nil, nil, err
 	}
 
 	summary := ScanSummary{
@@ -476,7 +476,7 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 		summary.Message = err.Error()
 		b.emitLog(kind, "error", msg(settings.Locale, "task.scan.failed_auth_files", err))
 		b.emitProgress(kind, "fetch", 0, 1, summary.Message, true)
-		return summary, nil, err
+		return summary, nil, nil, err
 	}
 	b.emitProgress(kind, "fetch", 1, 1, msg(settings.Locale, "task.scan.loaded_auth_files", len(files)), true)
 
@@ -484,7 +484,7 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 	if err != nil {
 		summary.Status = "failed"
 		summary.Message = err.Error()
-		return summary, nil, err
+		return summary, nil, nil, err
 	}
 
 	timestamp := nowISO()
@@ -548,27 +548,42 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 		summary.Status = taskStatus(err)
 		summary.Message = err.Error()
 		b.emitLog(kind, "warning", msg(settings.Locale, "task.scan.stopped", taskName(settings.Locale, kind), err))
-		return summary, nil, err
+		return summary, nil, nil, err
 	}
 
 	for i, index := range selectedIndexes {
-		records[index] = probed[i]
+		records[index] = probed[i].Record
 	}
 
 	if err := b.store.ReplaceCurrentAccounts(records); err != nil {
 		summary.Status = "failed"
 		summary.Message = err.Error()
-		return summary, nil, err
+		return summary, nil, nil, err
+	}
+	if kind == "scan" {
+		quotaSnapshot, ok, err := b.buildCodexQuotaSnapshotFromUsageProbes(settings, records, probed, nowISO(), "scan")
+		if err != nil {
+			summary.Status = "failed"
+			summary.Message = err.Error()
+			return summary, nil, nil, err
+		}
+		if ok {
+			if err := b.persistCodexQuotaSnapshot(quotaSnapshot); err != nil {
+				summary.Status = "failed"
+				summary.Message = err.Error()
+				return summary, nil, nil, err
+			}
+		}
 	}
 	if err := b.store.SaveScanRecords(runID, records); err != nil {
 		summary.Status = "failed"
 		summary.Message = err.Error()
-		return summary, nil, err
+		return summary, nil, nil, err
 	}
 	if err := b.store.TrimScanHistory(defaultHistoryLimit); err != nil {
 		summary.Status = "failed"
 		summary.Message = err.Error()
-		return summary, nil, err
+		return summary, nil, nil, err
 	}
 
 	filtered := filterAccountsBySettings(records, settings)
@@ -588,13 +603,13 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 
 	b.emitProgress(kind, "persist", 1, 1, msg(settings.Locale, "task.scan.saved_snapshot"), true)
 	b.emitLog(kind, "info", summary.Message)
-	return summary, records, nil
+	return summary, records, probed, nil
 }
 
 func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (MaintainResult, error) {
 	result := MaintainResult{}
 
-	summary, records, err := b.runScan(ctx, "maintain", settings)
+	summary, records, probes, err := b.runScan(ctx, "maintain", settings)
 	result.Scan = summary
 	if err != nil {
 		return result, err
@@ -698,12 +713,21 @@ func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (Mainta
 	if err := b.store.ReplaceCurrentAccounts(finalRecords); err != nil {
 		return result, err
 	}
+	quotaSnapshot, ok, err := b.buildCodexQuotaSnapshotFromUsageProbes(settings, finalRecords, probes, nowISO(), "maintain")
+	if err != nil {
+		return result, err
+	}
+	if ok {
+		if err := b.persistCodexQuotaSnapshot(quotaSnapshot); err != nil {
+			return result, err
+		}
+	}
 	b.emitProgress("maintain", "complete", 1, 1, msg(settings.Locale, "task.maintain.completed"), true)
 	b.emitLog("maintain", "info", msg(settings.Locale, "task.maintain.completed"))
 	return result, nil
 }
 
-func (b *Backend) probeAccounts(ctx context.Context, kind string, settings AppSettings, records []AccountRecord) ([]AccountRecord, error) {
+func (b *Backend) probeAccounts(ctx context.Context, kind string, settings AppSettings, records []AccountRecord) ([]UsageProbeResult, error) {
 	if len(records) == 0 {
 		b.emitProgress(kind, "probe", 0, 0, msg(settings.Locale, "task.scan.no_candidates"), true)
 		return nil, nil
@@ -714,7 +738,7 @@ func (b *Backend) probeAccounts(ctx context.Context, kind string, settings AppSe
 		workers = defaultProbeWorkers
 	}
 
-	results := make([]AccountRecord, len(records))
+	results := make([]UsageProbeResult, len(records))
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 	var completed int64
@@ -737,15 +761,15 @@ func (b *Backend) probeAccounts(ctx context.Context, kind string, settings AppSe
 				return
 			}
 
-			probed := b.client.ProbeUsage(ctx, settings, record, b.probeRetryLogger(settings.DetailedLogs, kind, settings.Locale))
+			probed := b.client.ProbeUsageResult(ctx, settings, record, b.probeRetryLogger(settings.DetailedLogs, kind, settings.Locale))
 			if ctx.Err() != nil {
 				return
 			}
 
 			results[index] = probed
 			current := int(atomic.AddInt64(&completed, 1))
-			b.emitDetailedLog(settings.DetailedLogs, kind, probeLogLevel(probed), msg(settings.Locale, "task.scan.single_probe", probed.Name, stateLabel(settings.Locale, probed.StateKey)))
-			b.emitProgress(kind, "probe", current, len(records), msg(settings.Locale, "task.scan.probed_account", probed.Name), current == len(records))
+			b.emitDetailedLog(settings.DetailedLogs, kind, probeLogLevel(probed.Record), msg(settings.Locale, "task.scan.single_probe", probed.Record.Name, stateLabel(settings.Locale, probed.Record.StateKey)))
+			b.emitProgress(kind, "probe", current, len(records), msg(settings.Locale, "task.scan.probed_account", probed.Record.Name), current == len(records))
 		}(index, record)
 	}
 

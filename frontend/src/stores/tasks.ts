@@ -2,9 +2,10 @@ import { defineStore } from 'pinia'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
 import { CancelScan, RunMaintain, RunScan } from '../../wailsjs/go/main/App'
 import { i18n } from '@/i18n'
-import type { LogEntry, MaintainOptions, TaskFinished, TaskProgress } from '@/types'
+import type { CodexQuotaSnapshot, LogEntry, MaintainOptions, TaskFinished, TaskProgress } from '@/types'
 import { toErrorMessage } from '@/utils/errors'
 import { useAccountsStore } from '@/stores/accounts'
+import { useQuotasStore } from '@/stores/quotas'
 import { taskPhaseLabel } from '@/utils/status'
 
 interface TaskTracker {
@@ -114,6 +115,9 @@ export const useTasksStore = defineStore('tasksStore', {
         }
         this.upsertProgressLog('quota', payload, message)
       })
+      EventsOn('quota:snapshot', (snapshot: CodexQuotaSnapshot) => {
+        useQuotasStore().applySnapshot(snapshot)
+      })
       EventsOn('task:finished', (payload: TaskFinished) => {
         if (payload.kind === 'scan') {
           this.scan.active = false
@@ -147,6 +151,7 @@ export const useTasksStore = defineStore('tasksStore', {
       EventsOff('maintain:progress')
       EventsOff('inventory:progress')
       EventsOff('quota:progress')
+      EventsOff('quota:snapshot')
       EventsOff('task:finished')
       this.initialised = false
     },

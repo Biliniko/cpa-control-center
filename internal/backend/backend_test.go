@@ -405,6 +405,9 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCodexQuotaSnapshot: %v", err)
 	}
+	if snapshot.Source != "quota_refresh" || snapshot.Coverage != "full" || snapshot.CoveredAccounts != 3 {
+		t.Fatalf("unexpected snapshot metadata: %+v", snapshot)
+	}
 	if snapshot.TotalAccounts != 3 || snapshot.SuccessfulAccounts != 2 || snapshot.FailedAccounts != 1 {
 		t.Fatalf("unexpected snapshot counters: %+v", snapshot)
 	}
@@ -468,6 +471,106 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 	}
 	if failedAccount.FiveHour.RemainingPercent != nil || failedAccount.Weekly.RemainingPercent != nil || failedAccount.CodeReviewWeekly.RemainingPercent != nil {
 		t.Fatalf("failed account should not contain quota values: %+v", failedAccount)
+	}
+}
+
+func TestRunScanPersistsQuotaSnapshotWithoutExtraUsageRequests(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "quota-scan.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "quota-scan",
+				"id_token":   `{"chatgpt_account_id":"acct-quota-scan","plan_type":"pro"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files":
+			serverState.mu.Lock()
+			files := serverState.files
+			serverState.fetches++
+			serverState.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"files": files})
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			serverState.mu.Lock()
+			serverState.apiCalls++
+			serverState.apiAuths = append(serverState.apiAuths, "quota-scan")
+			serverState.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 200,
+				"body": `{
+					"plan_type":"pro",
+					"rate_limit":{"allowed":true,"limit_reached":false},
+					"rate_limits":{
+						"five_hour":{"used_percent":20,"reset_at":"2026-03-12T05:00:00Z","window_seconds":18000},
+						"weekly":{"used_percent":35,"reset_at":"2026-03-18T00:00:00Z","window_seconds":604800}
+					},
+					"code_review_rate_limit":{"used_percent":10,"reset_at":"2026-03-18T00:00:00Z","window_seconds":604800}
+				}`,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:              server.URL,
+		ManagementToken:      "token",
+		Locale:               localeEnglish,
+		TargetType:           "codex",
+		ProbeWorkers:         4,
+		ActionWorkers:        2,
+		QuotaWorkers:         3,
+		TimeoutSeconds:       5,
+		Retries:              0,
+		UserAgent:            defaultUserAgent,
+		QuotaAction:          "disable",
+		QuotaCheckPro:        true,
+		QuotaFreeMaxAccounts: 100,
+		ExportDirectory:      filepath.Join(dataDir, "exports"),
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	summary, err := service.RunScan()
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if summary.ProbedAccounts != 1 || summary.NormalCount != 1 {
+		t.Fatalf("unexpected scan summary: %+v", summary)
+	}
+
+	snapshot, ok, err := service.store.LoadCodexQuotaSnapshot()
+	if err != nil {
+		t.Fatalf("LoadCodexQuotaSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected scan to persist a quota snapshot")
+	}
+	if snapshot.Source != "scan" || snapshot.Coverage != "full" || snapshot.CoveredAccounts != 1 {
+		t.Fatalf("unexpected scan snapshot metadata: %+v", snapshot)
+	}
+	if snapshot.TotalAccounts != 1 || snapshot.SuccessfulAccounts != 1 || len(snapshot.Accounts) != 1 {
+		t.Fatalf("unexpected scan snapshot data: %+v", snapshot)
+	}
+
+	serverState.mu.Lock()
+	apiCalls := serverState.apiCalls
+	serverState.mu.Unlock()
+	if apiCalls != 1 {
+		t.Fatalf("expected exactly one usage request during scan, got %d", apiCalls)
 	}
 }
 

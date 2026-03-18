@@ -30,6 +30,12 @@ type ProbeRetryEvent struct {
 
 type ProbeRetryObserver func(ProbeRetryEvent)
 
+type UsageProbeResult struct {
+	Record     AccountRecord
+	Usage      map[string]any
+	UsageError error
+}
+
 func NewClient() *Client {
 	return &Client{
 		httpClient: &http.Client{},
@@ -140,11 +146,19 @@ func (c *Client) BuildAccountRecord(item map[string]any, previous *AccountRecord
 }
 
 func (c *Client) ProbeUsage(ctx context.Context, settings AppSettings, record AccountRecord, retryObservers ...ProbeRetryObserver) AccountRecord {
+	return c.ProbeUsageResult(ctx, settings, record, retryObservers...).Record
+}
+
+func (c *Client) ProbeUsageResult(ctx context.Context, settings AppSettings, record AccountRecord, retryObservers ...ProbeRetryObserver) UsageProbeResult {
 	if strings.TrimSpace(record.ChatGPTAccountID) == "" {
 		record = resetProbeState(record)
 		record.ProbeErrorKind = "missing_chatgpt_account_id"
 		record.ProbeErrorText = msg(settings.Locale, "error.missing_chatgpt_account_id")
-		return classifyAccountState(record)
+		record = classifyAccountState(record)
+		return UsageProbeResult{
+			Record:     record,
+			UsageError: errors.New(record.ProbeErrorText),
+		}
 	}
 
 	attempts := settings.Retries + 1
@@ -157,10 +171,10 @@ func (c *Client) ProbeUsage(ctx context.Context, settings AppSettings, record Ac
 		onRetry = retryObservers[0]
 	}
 
-	var probed AccountRecord
+	var probed UsageProbeResult
 	for attempt := 1; attempt <= attempts; attempt++ {
 		probed = c.probeUsageOnce(ctx, settings, record)
-		if !shouldRetryProbeResult(probed) || attempt == attempts || ctx.Err() != nil {
+		if !shouldRetryProbeResult(probed.Record) || attempt == attempts || ctx.Err() != nil {
 			return probed
 		}
 		if onRetry != nil {
@@ -168,9 +182,9 @@ func (c *Client) ProbeUsage(ctx context.Context, settings AppSettings, record Ac
 				AccountName:    record.Name,
 				RetryIndex:     attempt,
 				MaxRetries:     attempts - 1,
-				ProbeErrorKind: probed.ProbeErrorKind,
-				ProbeErrorText: probed.ProbeErrorText,
-				StatusCode:     intValue(probed.APIStatusCode),
+				ProbeErrorKind: probed.Record.ProbeErrorKind,
+				ProbeErrorText: probed.Record.ProbeErrorText,
+				StatusCode:     intValue(probed.Record.APIStatusCode),
 			})
 		}
 		if err := waitForRetry(ctx, c.retryDelay*time.Duration(attempt)); err != nil {
@@ -182,40 +196,16 @@ func (c *Client) ProbeUsage(ctx context.Context, settings AppSettings, record Ac
 }
 
 func (c *Client) FetchWhamUsage(ctx context.Context, settings AppSettings, record AccountRecord) (map[string]any, error) {
-	if strings.TrimSpace(record.ChatGPTAccountID) == "" {
-		return nil, errors.New(msg(settings.Locale, "error.missing_chatgpt_account_id"))
+	result := c.ProbeUsageResult(ctx, settings, record)
+	if result.UsageError != nil {
+		return nil, result.UsageError
 	}
-
-	payload := map[string]any{
-		"authIndex": record.AuthIndex,
-		"method":    http.MethodGet,
-		"url":       whamUsageURL,
-		"header": map[string]string{
-			"Authorization":      "Bearer $TOKEN$",
-			"Content-Type":       "application/json",
-			"User-Agent":         settings.UserAgent,
-			"Chatgpt-Account-Id": record.ChatGPTAccountID,
-		},
-	}
-
-	body, err := c.doRequest(ctx, settings, http.MethodPost, settings.BaseURL+"/v0/management/api-call", payload)
-	if err != nil {
-		return nil, err
-	}
-
-	statusCode, ok := intValueFromAny(body["status_code"])
-	if !ok {
-		return nil, errors.New(msg(settings.Locale, "error.missing_status_code"))
-	}
-	if statusCode != http.StatusOK {
-		return nil, errors.New(msg(settings.Locale, "error.unexpected_upstream_status", statusCode))
-	}
-
-	return toJSONObject(settings.Locale, body["body"])
+	return result.Usage, nil
 }
 
-func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, record AccountRecord) AccountRecord {
+func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, record AccountRecord) UsageProbeResult {
 	record = resetProbeState(record)
+	result := UsageProbeResult{Record: record}
 
 	payload := map[string]any{
 		"authIndex": record.AuthIndex,
@@ -231,57 +221,69 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 
 	body, err := c.doRequest(ctx, settings, http.MethodPost, settings.BaseURL+"/v0/management/api-call", payload)
 	if err != nil {
-		record.ProbeErrorKind = "management_api"
-		record.ProbeErrorText = err.Error()
-		return classifyAccountState(record)
+		result.Record.ProbeErrorKind = "management_api"
+		result.Record.ProbeErrorText = err.Error()
+		result.Record = classifyAccountState(result.Record)
+		result.UsageError = err
+		return result
 	}
 
 	statusCode, ok := intValueFromAny(body["status_code"])
 	if !ok {
-		record.ProbeErrorKind = "missing_status_code"
-		record.ProbeErrorText = msg(settings.Locale, "error.missing_status_code")
-		return classifyAccountState(record)
+		result.Record.ProbeErrorKind = "missing_status_code"
+		result.Record.ProbeErrorText = msg(settings.Locale, "error.missing_status_code")
+		result.Record = classifyAccountState(result.Record)
+		result.UsageError = errors.New(result.Record.ProbeErrorText)
+		return result
 	}
-	record.APIStatusCode = intPtr(statusCode)
+	result.Record.APIStatusCode = intPtr(statusCode)
 
 	if httpStatus, ok := intValueFromAny(body["http_status"]); ok {
-		record.APIHTTPStatus = intPtr(httpStatus)
+		result.Record.APIHTTPStatus = intPtr(httpStatus)
 	}
 
 	rawBody := body["body"]
 	parsedBody, err := toJSONObject(settings.Locale, rawBody)
 	if err != nil && statusCode != http.StatusUnauthorized {
-		record.ProbeErrorKind = "body_invalid_json"
-		record.ProbeErrorText = err.Error()
-		return classifyAccountState(record)
+		result.Record.ProbeErrorKind = "body_invalid_json"
+		result.Record.ProbeErrorText = err.Error()
+		result.Record = classifyAccountState(result.Record)
+		result.UsageError = err
+		return result
 	}
 
 	if statusCode == http.StatusUnauthorized {
-		record.ProbeErrorKind = ""
-		record.ProbeErrorText = ""
-		return classifyAccountState(record)
+		result.Record.ProbeErrorKind = ""
+		result.Record.ProbeErrorText = ""
+		result.Record = classifyAccountState(result.Record)
+		result.UsageError = errors.New(msg(settings.Locale, "error.unexpected_upstream_status", statusCode))
+		return result
 	}
 
 	rateLimit, _ := parsedBody["rate_limit"].(map[string]any)
 	if allowed, ok := boolFromMap(rateLimit, "allowed"); ok {
-		record.Allowed = boolPtr(allowed)
+		result.Record.Allowed = boolPtr(allowed)
 	}
 	if limitReached, ok := boolFromMap(rateLimit, "limit_reached"); ok {
-		record.LimitReached = boolPtr(limitReached)
+		result.Record.LimitReached = boolPtr(limitReached)
 	}
 	if email := strings.TrimSpace(stringValue(parsedBody["email"])); email != "" {
-		record.Email = email
+		result.Record.Email = email
 	}
 	if planType := strings.TrimSpace(stringValue(parsedBody["plan_type"])); planType != "" {
-		record.PlanType = planType
+		result.Record.PlanType = planType
 	}
 
 	if statusCode != http.StatusOK {
-		record.ProbeErrorKind = "unexpected_status"
-		record.ProbeErrorText = msg(settings.Locale, "error.unexpected_upstream_status", statusCode)
+		result.Record.ProbeErrorKind = "unexpected_status"
+		result.Record.ProbeErrorText = msg(settings.Locale, "error.unexpected_upstream_status", statusCode)
+		result.UsageError = errors.New(result.Record.ProbeErrorText)
+	} else {
+		result.Usage = parsedBody
 	}
 
-	return classifyAccountState(record)
+	result.Record = classifyAccountState(result.Record)
+	return result
 }
 
 func resetProbeState(record AccountRecord) AccountRecord {

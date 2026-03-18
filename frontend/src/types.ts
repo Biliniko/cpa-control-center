@@ -175,6 +175,9 @@ export interface CodexPlanQuotaSummary {
 export interface CodexQuotaSnapshot {
   plans: CodexPlanQuotaSummary[]
   accounts: CodexQuotaAccountDetail[]
+  source: string
+  coverage: string
+  coveredAccounts: number
   fetchedAt: string
   totalAccounts: number
   successfulAccounts: number

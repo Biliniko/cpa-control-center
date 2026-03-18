@@ -421,6 +421,13 @@ func (b *Backend) emitTaskFinished(kind string, status string, message string) {
 	})
 }
 
+func (b *Backend) emitQuotaSnapshot(snapshot CodexQuotaSnapshot) {
+	if b.emitter == nil {
+		return
+	}
+	b.emitter.Emit("quota:snapshot", snapshot)
+}
+
 func (b *Backend) emitAccountUpdate(action string, removed bool, record AccountRecord) {
 	if b.emitter == nil {
 		return

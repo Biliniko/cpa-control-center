@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## v1.5.1
+
+### Highlights
+
+- Reused scan and maintenance usage probes to update Codex quota snapshots instead of requiring a separate quota refresh request for the same accounts.
+- Persisted the latest Codex quota snapshot in the local store and pushed live snapshot updates to the frontend when scan, maintain, or quota refresh completes.
+- Added snapshot source and coverage metadata so the quota workspace can distinguish full refreshes from partial updates driven by scan coverage.
+
+### Notes
+
+- Scans and maintenance runs now update quota data for the accounts they actually probe, while manual quota refresh remains available for a full quota-specific pass.
+- The quota page still does not backfill account scan results on its own; quota refresh only updates quota snapshots.
+
 ## v1.5.0
 
 ### Highlights

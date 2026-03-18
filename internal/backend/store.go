@@ -106,6 +106,14 @@ CREATE TABLE IF NOT EXISTS scan_records (
 	PRIMARY KEY (run_id, name),
 	FOREIGN KEY (run_id) REFERENCES scan_runs(run_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+	snapshot_key TEXT PRIMARY KEY,
+	fetched_at TEXT NOT NULL,
+	source TEXT NOT NULL,
+	coverage TEXT NOT NULL,
+	data_json TEXT NOT NULL
+);
 `
 
 	if _, err := s.db.Exec(schema); err != nil {
@@ -616,6 +624,45 @@ func (s *Store) SaveScanRecords(runID int64, records []AccountRecord) error {
 	}
 
 	return tx.Commit()
+}
+
+func (s *Store) SaveCodexQuotaSnapshot(snapshot CodexQuotaSnapshot) error {
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO quota_snapshots (snapshot_key, fetched_at, source, coverage, data_json)
+		VALUES ('codex', ?, ?, ?, ?)
+		ON CONFLICT(snapshot_key) DO UPDATE SET
+			fetched_at = excluded.fetched_at,
+			source = excluded.source,
+			coverage = excluded.coverage,
+			data_json = excluded.data_json`,
+		snapshot.FetchedAt,
+		snapshot.Source,
+		snapshot.Coverage,
+		string(data),
+	)
+	return err
+}
+
+func (s *Store) LoadCodexQuotaSnapshot() (CodexQuotaSnapshot, bool, error) {
+	var data string
+	err := s.db.QueryRow(`SELECT data_json FROM quota_snapshots WHERE snapshot_key = 'codex'`).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CodexQuotaSnapshot{}, false, nil
+	}
+	if err != nil {
+		return CodexQuotaSnapshot{}, false, err
+	}
+
+	var snapshot CodexQuotaSnapshot
+	if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
+		return CodexQuotaSnapshot{}, false, err
+	}
+	return snapshot, true, nil
 }
 
 func (s *Store) TrimScanHistory(limit int) error {

@@ -269,7 +269,7 @@ func (b *Backend) executeScheduledTask(mode string, cronExpr string) (string, st
 		runErr = err
 		resultMessage = result.Scan.Message
 	default:
-		summary, _, err := b.runScan(ctx, "scan", settings)
+		summary, _, _, err := b.runScan(ctx, "scan", settings)
 		runErr = err
 		resultMessage = summary.Message
 	}
