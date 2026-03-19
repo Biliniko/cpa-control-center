@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import {
   ElButton,
   ElForm,
@@ -15,8 +15,10 @@ import {
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
+import type { AuthImportResult } from '@/types'
 import { formatDateTime } from '@/utils/format'
 import { toErrorMessage } from '@/utils/errors'
+import { listScheduleConflicts, type ScheduleConflictJob } from '@/utils/settings'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
@@ -26,6 +28,9 @@ const isChinese = computed(() => settingsStore.currentLocale === 'zh-CN')
 const skipKnown401Label = computed(() => (isChinese.value ? '扫描时跳过已知 401' : 'Skip known 401 during scan'))
 
 const infoAriaLabel = computed(() => (isChinese.value ? '更多信息' : 'More information'))
+
+const importingFiles = ref(false)
+const importingDirectory = ref(false)
 
 const infoCopy = computed<Record<string, string>>(() => (
   isChinese.value
@@ -101,6 +106,47 @@ const schedulerMessage = computed(() => (
   t('common.notAvailable')
 ))
 
+const authImportSchedulerStatusText = computed(() => {
+  const status = settingsStore.authImportSchedulerStatus.lastStatus
+  if (!status) {
+    return t('common.notAvailable')
+  }
+  return t(`settings.scheduleStatus.${status}`)
+})
+
+const authImportSchedulerMessage = computed(() => (
+  settingsStore.authImportSchedulerStatus.validationMessage ||
+  settingsStore.authImportSchedulerStatus.lastMessage ||
+  t('common.notAvailable')
+))
+
+function scheduleJobLabel(job: ScheduleConflictJob) {
+  switch (job) {
+    case 'authImport':
+      return t('settings.scheduleJobImport')
+    case 'quotaAutoRefresh':
+      return t('settings.scheduleJobQuota')
+    default:
+      return settingsStore.settings.schedule.mode === 'maintain'
+        ? t('settings.scheduleJobMaintain')
+        : t('settings.scheduleJobScan')
+  }
+}
+
+const scheduleConflictMessages = computed(() => (
+  listScheduleConflicts(settingsStore.settings).map((conflict) => (
+    t('settings.scheduleConflictWarning', {
+      first: scheduleJobLabel(conflict.jobs[0]),
+      second: scheduleJobLabel(conflict.jobs[1]),
+      time: formatDateTime(conflict.at),
+    })
+  ))
+))
+
+function scheduleConflictSummary(messages: string[]) {
+  return messages.join(isChinese.value ? '；' : '; ')
+}
+
 async function testOnly() {
   try {
     const result = await settingsStore.testConnection()
@@ -120,10 +166,14 @@ async function testOnly() {
 
 async function testAndSave() {
   try {
+    const scheduleWarnings = [...scheduleConflictMessages.value]
     const result = await settingsStore.testAndSave()
     tasksStore.scheduleInventorySync()
     if (!result) {
       ElMessage.success(t('settings.savedReachableSyncingBasic'))
+      if (scheduleWarnings.length > 0) {
+        ElMessage.warning(scheduleConflictSummary(scheduleWarnings))
+      }
       return
     }
     ElMessage.success(
@@ -131,6 +181,9 @@ async function testAndSave() {
         ? t('settings.savedReachableSyncing', { count: result.accountCount })
         : t('settings.savedReachableSyncingBasic'),
     )
+    if (scheduleWarnings.length > 0) {
+      ElMessage.warning(scheduleConflictSummary(scheduleWarnings))
+    }
   } catch (error) {
     ElMessage.error(toErrorMessage(error))
   }
@@ -141,6 +194,93 @@ async function changeLocale(locale: string) {
     await settingsStore.saveLocalePreference(locale)
   } catch (error) {
     ElMessage.error(toErrorMessage(error))
+  }
+}
+
+function firstImportError(result: AuthImportResult) {
+  return result.results.find((item) => !item.ok && item.error.trim().length > 0)?.error || ''
+}
+
+function notifyImportResult(result: AuthImportResult) {
+  if (!result || result.requested <= 0) {
+    return
+  }
+
+  if (result.uploaded > 0 && result.archiveFailed === 0 && result.archived > 0 && !result.syncError && result.failed === 0 && result.skipped === 0) {
+    ElMessage.success(t('settings.importArchiveSuccess', { uploaded: result.uploaded, archived: result.archived }))
+    return
+  }
+
+  if (result.uploaded > 0 && result.archiveFailed > 0) {
+    ElMessage.warning(
+      t('settings.importArchiveWarning', {
+        uploaded: result.uploaded,
+        requested: result.requested,
+        archiveFailed: result.archiveFailed,
+      }),
+    )
+    return
+  }
+
+  if (result.uploaded > 0 && !result.syncError && result.failed === 0 && result.skipped === 0) {
+    ElMessage.success(t('settings.importSuccess', { uploaded: result.uploaded }))
+    return
+  }
+
+  if (result.uploaded > 0 && result.syncError) {
+    ElMessage.warning(
+      t('settings.importPartialWithSyncError', {
+        uploaded: result.uploaded,
+        requested: result.requested,
+        failed: result.failed,
+        skipped: result.skipped,
+        error: result.syncError,
+      }),
+    )
+    return
+  }
+
+  if (result.uploaded > 0) {
+    ElMessage.warning(
+      t('settings.importPartial', {
+        uploaded: result.uploaded,
+        requested: result.requested,
+        failed: result.failed,
+        skipped: result.skipped,
+      }),
+    )
+    return
+  }
+
+  ElMessage.error(
+    firstImportError(result) || t('settings.importFailure', {
+      failed: result.failed,
+      skipped: result.skipped,
+    }),
+  )
+}
+
+async function importFiles() {
+  importingFiles.value = true
+  try {
+    const result = await settingsStore.importAuthFiles()
+    notifyImportResult(result)
+  } catch (error) {
+    ElMessage.error(toErrorMessage(error))
+  } finally {
+    importingFiles.value = false
+  }
+}
+
+async function importDirectory() {
+  importingDirectory.value = true
+  try {
+    const result = await settingsStore.importAuthDirectory()
+    notifyImportResult(result)
+  } catch (error) {
+    ElMessage.error(toErrorMessage(error))
+  } finally {
+    importingDirectory.value = false
   }
 }
 </script>
@@ -518,6 +658,83 @@ async function changeLocale(locale: string) {
           </div>
         </section>
 
+        <section class="settings-schedule">
+          <div class="panel-head panel-head--tight">
+            <div>
+              <p class="panel-kicker">{{ t('settings.importSection') }}</p>
+              <h3>{{ t('settings.importTitle') }}</h3>
+            </div>
+          </div>
+
+          <p class="muted">{{ t('settings.importHint') }}</p>
+          <p class="muted">{{ t('settings.importDirectoryRememberHint') }}</p>
+          <p class="muted">{{ t('settings.importArchiveHint') }}</p>
+
+          <div class="settings-grid settings-grid--schedule">
+            <el-form-item :label="t('settings.importSourceDirectory')" :error="settingsStore.errors.authImportSourceDirectory">
+              <el-input v-model="settingsStore.settings.authImport.sourceDirectory" />
+            </el-form-item>
+            <el-form-item :label="t('settings.importArchiveDirectory')">
+              <el-input v-model="settingsStore.settings.authImport.archiveDirectory" />
+            </el-form-item>
+            <el-form-item :label="t('settings.importAutoEnabled')">
+              <el-switch v-model="settingsStore.settings.authImport.autoEnabled" />
+            </el-form-item>
+            <el-form-item :label="t('settings.importMoveImported')">
+              <el-switch v-model="settingsStore.settings.authImport.moveImported" />
+            </el-form-item>
+            <el-form-item class="span-2" :label="t('settings.importAutoCron')" :error="settingsStore.errors.authImportAutoCron">
+              <el-input
+                v-model="settingsStore.settings.authImport.autoCron"
+                :disabled="!settingsStore.settings.authImport.autoEnabled"
+                :placeholder="t('settings.scheduleCronPlaceholder')"
+              />
+            </el-form-item>
+          </div>
+
+          <div class="hero-actions">
+            <el-button :loading="importingFiles" :disabled="settingsStore.saving || importingDirectory" @click="importFiles">
+              {{ t('settings.importFiles') }}
+            </el-button>
+            <el-button plain :loading="importingDirectory" :disabled="settingsStore.saving || importingFiles" @click="importDirectory">
+              {{ t('settings.importDirectory') }}
+            </el-button>
+          </div>
+
+          <div class="settings-schedule-status">
+            <div>
+              <strong>{{ t('settings.importScheduleNextRun') }}</strong>
+              <span>{{ formatDateTime(settingsStore.authImportSchedulerStatus.nextRunAt) }}</span>
+            </div>
+            <div>
+              <strong>{{ t('settings.importScheduleLastStarted') }}</strong>
+              <span>{{ formatDateTime(settingsStore.authImportSchedulerStatus.lastStartedAt) }}</span>
+            </div>
+            <div>
+              <strong>{{ t('settings.importScheduleLastFinished') }}</strong>
+              <span>{{ formatDateTime(settingsStore.authImportSchedulerStatus.lastFinishedAt) }}</span>
+            </div>
+            <div>
+              <strong>{{ t('settings.importScheduleLastResult') }}</strong>
+              <span>{{ authImportSchedulerStatusText }}</span>
+            </div>
+            <div class="span-2">
+              <strong>{{ t('settings.importScheduleStatusMessage') }}</strong>
+              <span>{{ authImportSchedulerMessage }}</span>
+            </div>
+          </div>
+        </section>
+
+        <div class="settings-schedule-hints">
+          <p class="muted">{{ t('settings.scheduleRecommendedOffsets') }}</p>
+          <div v-if="scheduleConflictMessages.length > 0" class="settings-schedule-conflicts">
+            <strong>{{ t('settings.scheduleConflictTitle') }}</strong>
+            <p v-for="message in scheduleConflictMessages" :key="message">
+              {{ message }}
+            </p>
+          </div>
+        </div>
+
         <div class="hero-actions">
           <el-button plain @click="testOnly">{{ t('settings.testConnection') }}</el-button>
           <el-button type="primary" :loading="settingsStore.saving" @click="testAndSave">
@@ -528,3 +745,24 @@ async function changeLocale(locale: string) {
     </section>
   </div>
 </template>
+
+<style scoped>
+.settings-schedule-hints {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.settings-schedule-conflicts {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid rgba(184, 119, 0, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 243, 205, 0.72);
+  color: #6a4b00;
+}
+
+.settings-schedule-conflicts p {
+  margin: 0;
+}
+</style>

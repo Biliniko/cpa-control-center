@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElButton, ElMessage, ElOption, ElSelect } from 'element-plus'
 import { useI18n } from 'vue-i18n'
 import QuotaAccountDetailPanel from '@/components/QuotaAccountDetailPanel.vue'
@@ -8,6 +8,7 @@ import QuotaPlanOverview from '@/components/QuotaPlanOverview.vue'
 import QuotaRecoveryQueue from '@/components/QuotaRecoveryQueue.vue'
 import QuotaViewTabs from '@/components/QuotaViewTabs.vue'
 import { useQuotasStore } from '@/stores/quotas'
+import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
 import type { QuotaRecoveryMode, QuotaViewMode } from '@/types'
 import { formatDateTime } from '@/utils/format'
@@ -16,10 +17,13 @@ import { compareQuotaAccounts, normalizeQuotaPlanType, quotaPlanRank, quotaRecov
 
 const { t } = useI18n()
 const quotasStore = useQuotasStore()
+const settingsStore = useSettingsStore()
 const tasksStore = useTasksStore()
 const matrixRowOptions = [2, 3, 4, 5, 6]
+const usageAutoRefreshIntervalMs = 15000
 const matrixColumns = ref(6)
 const recoveryColumns = ref(3)
+let usageAutoRefreshTimer: number | null = null
 const recoveryModeOptions = computed<Array<{ value: QuotaRecoveryMode; label: string }>>(() => [
   { value: 'earliest', label: t('quotas.recovery.filters.earliest') },
   { value: 'fiveHour', label: t('quotas.recovery.filters.fiveHour') },
@@ -33,6 +37,7 @@ const tabItems = computed<Array<{ key: QuotaViewMode; label: string; caption: st
 ])
 
 const snapshot = computed(() => quotasStore.snapshot)
+const usageSummary = computed(() => quotasStore.usageSummary)
 const plans = computed(() => quotasStore.plans)
 const accountDetails = computed(() => quotasStore.accountDetails)
 const hasData = computed(() => plans.value.length > 0)
@@ -48,6 +53,50 @@ const showPartialWarning = computed(() => (
 const isFailureOnlySnapshot = computed(() => (
   Boolean(snapshot.value && snapshot.value.failedAccounts > 0 && snapshot.value.successfulAccounts === 0)
 ))
+const hasUsageConnection = computed(() => (
+  Boolean(settingsStore.settings.baseUrl.trim() && settingsStore.settings.managementToken.trim())
+))
+const usageLastFetchedLabel = computed(() => (
+  usageSummary.value?.fetchedAt ? formatDateTime(usageSummary.value.fetchedAt) : t('common.notAvailable')
+))
+const usageLastRequestLabel = computed(() => (
+  usageSummary.value?.lastRequestAt ? formatDateTime(usageSummary.value.lastRequestAt) : t('common.notAvailable')
+))
+const usageSuccessRateLabel = computed(() => {
+  if (!usageSummary.value || usageSummary.value.totalRequests <= 0) {
+    return t('common.notAvailable')
+  }
+  return `${((usageSummary.value.successCount / usageSummary.value.totalRequests) * 100).toFixed(1)}%`
+})
+const usageCards = computed(() => {
+  const summary = usageSummary.value
+  const tokens = summary?.tokens ?? {
+    totalTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cachedTokens: 0,
+  }
+  const hasSummary = Boolean(summary)
+  return [
+    { key: 'totalTokens', label: t('usage.cards.totalTokens'), value: hasSummary ? formatInteger(tokens.totalTokens) : t('common.notAvailable'), hero: true },
+    { key: 'todayTokens', label: t('usage.cards.todayTokens'), value: hasSummary ? formatInteger(summary?.todayTokens) : t('common.notAvailable'), hero: false },
+    { key: 'inputTokens', label: t('usage.cards.inputTokens'), value: hasSummary ? formatInteger(tokens.inputTokens) : t('common.notAvailable'), hero: false },
+    { key: 'outputTokens', label: t('usage.cards.outputTokens'), value: hasSummary ? formatInteger(tokens.outputTokens) : t('common.notAvailable'), hero: false },
+    { key: 'totalRequests', label: t('usage.cards.totalRequests'), value: hasSummary ? formatInteger(summary?.totalRequests) : t('common.notAvailable'), hero: false },
+    { key: 'successRate', label: t('usage.cards.successRate'), value: hasSummary ? usageSuccessRateLabel.value : t('common.notAvailable'), hero: false },
+  ]
+})
+const usageMetaItems = computed(() => {
+  const summary = usageSummary.value
+  const hasSummary = Boolean(summary)
+  return [
+    { key: 'lastRequest', label: t('usage.meta.lastRequest'), value: hasSummary ? usageLastRequestLabel.value : t('common.notAvailable') },
+    { key: 'apiKeys', label: t('usage.meta.apiKeys'), value: hasSummary ? formatInteger(summary?.apiKeyCount) : t('common.notAvailable') },
+    { key: 'models', label: t('usage.meta.models'), value: hasSummary ? formatInteger(summary?.modelCount) : t('common.notAvailable') },
+    { key: 'failedRequests', label: t('usage.meta.failedRequests'), value: hasSummary ? formatInteger(summary?.failedRequests) : t('common.notAvailable') },
+  ]
+})
 
 const quotaProgress = computed(() => tasksStore.quota)
 const isRefreshing = computed(() => tasksStore.quota.active)
@@ -119,6 +168,10 @@ function closeDetail() {
   quotasStore.setSelectedAccount('')
 }
 
+function formatInteger(value?: number | null) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value).toLocaleString() : t('common.notAvailable')
+}
+
 watch(matrixPageCount, (count) => {
   if (quotasStore.matrixPage > count) {
     quotasStore.setMatrixPage(count)
@@ -137,9 +190,45 @@ watch(filteredAccounts, (accounts) => {
   }
 })
 
+async function refreshUsageSummary(silent = false) {
+  if (!hasUsageConnection.value) {
+    return
+  }
+  try {
+    await quotasStore.refreshUsageSummary(silent)
+  } catch (error) {
+    if (!silent) {
+      ElMessage.error(toErrorMessage(error))
+    }
+  }
+}
+
+function stopUsageAutoRefresh() {
+  if (usageAutoRefreshTimer !== null) {
+    window.clearInterval(usageAutoRefreshTimer)
+    usageAutoRefreshTimer = null
+  }
+}
+
+function syncUsageAutoRefresh() {
+  stopUsageAutoRefresh()
+  if (!hasUsageConnection.value) {
+    return
+  }
+  usageAutoRefreshTimer = window.setInterval(() => {
+    if (document.hidden || quotasStore.usageLoading) {
+      return
+    }
+    void refreshUsageSummary(true)
+  }, usageAutoRefreshIntervalMs)
+}
+
 async function refreshSnapshot() {
   try {
-    const latestSnapshot = await quotasStore.refreshSnapshot()
+    const [latestSnapshot] = await Promise.all([
+      quotasStore.refreshSnapshot(),
+      hasUsageConnection.value ? quotasStore.refreshUsageSummary(true).catch(() => null) : Promise.resolve(null),
+    ])
     if (
       latestSnapshot.failedAccounts > 0 &&
       latestSnapshot.successfulAccounts === 0 &&
@@ -151,6 +240,21 @@ async function refreshSnapshot() {
     ElMessage.error(toErrorMessage(error))
   }
 }
+
+watch(hasUsageConnection, () => {
+  syncUsageAutoRefresh()
+})
+
+onMounted(() => {
+  syncUsageAutoRefresh()
+  if (hasUsageConnection.value && !usageSummary.value && !quotasStore.usageLoading) {
+    void refreshUsageSummary(true)
+  }
+})
+
+onUnmounted(() => {
+  stopUsageAutoRefresh()
+})
 </script>
 
 <template>
@@ -185,6 +289,64 @@ async function refreshSnapshot() {
           </div>
         </div>
       </div>
+    </section>
+
+    <section class="panel usage-summary-panel">
+      <div class="usage-summary-panel__head">
+        <div>
+          <p class="panel-kicker">{{ t('usage.kicker') }}</p>
+          <h3>{{ t('usage.title') }}</h3>
+          <p class="muted usage-summary-panel__lead">{{ t('usage.lead') }}</p>
+        </div>
+        <div class="usage-summary-panel__actions">
+          <span class="muted usage-summary-panel__hint">{{ t('usage.autoRefreshHint') }}</span>
+          <div class="usage-summary-panel__controls">
+            <span class="muted">{{ t('usage.lastUpdated', { value: usageLastFetchedLabel }) }}</span>
+            <el-button :loading="quotasStore.usageLoading" :disabled="!hasUsageConnection" @click="refreshUsageSummary(false)">
+              {{ t('usage.refresh') }}
+            </el-button>
+          </div>
+        </div>
+      </div>
+
+      <div v-if="!hasUsageConnection" class="usage-summary-panel__empty muted">
+        {{ t('usage.unconfigured') }}
+      </div>
+
+      <template v-else>
+        <div v-if="quotasStore.usageError" class="quota-callout" :class="usageSummary ? 'quota-callout--warning' : 'quota-callout--error'">
+          <strong>{{ usageSummary ? t('usage.staleWarningTitle') : t('usage.loadFailedTitle') }}</strong>
+          <p v-if="usageSummary" class="muted">{{ t('usage.staleWarningBody') }}</p>
+          <p class="muted">{{ quotasStore.usageError }}</p>
+        </div>
+
+        <p v-else-if="quotasStore.usageLoading && !usageSummary" class="muted usage-summary-panel__status">
+          {{ t('usage.loading') }}
+        </p>
+
+        <p v-else-if="!usageSummary" class="muted usage-summary-panel__status">
+          {{ t('usage.empty') }}
+        </p>
+
+        <div class="usage-summary-panel__grid">
+          <article
+            v-for="card in usageCards"
+            :key="card.key"
+            class="usage-summary-panel__card"
+            :class="{ 'usage-summary-panel__card--hero': card.hero }"
+          >
+            <span class="usage-summary-panel__card-label">{{ card.label }}</span>
+            <strong class="usage-summary-panel__card-value">{{ card.value }}</strong>
+          </article>
+        </div>
+
+        <div class="usage-summary-panel__meta-list">
+          <span v-for="item in usageMetaItems" :key="item.key" class="usage-summary-panel__meta-pill">
+            <strong>{{ item.label }}</strong>
+            <span>{{ item.value }}</span>
+          </span>
+        </div>
+      </template>
     </section>
 
     <QuotaViewTabs v-model="quotasStore.activeView" :items="tabItems" />

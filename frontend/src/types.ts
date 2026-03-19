@@ -1,6 +1,7 @@
 export type LocaleCode = 'en-US' | 'zh-CN'
 export type ScheduleMode = 'scan' | 'maintain'
 export type ScanStrategy = 'full' | 'incremental'
+export type TaskKind = 'scan' | 'maintain' | 'inventory' | 'quota' | 'import'
 
 export type AccountStateKey =
   | 'pending'
@@ -40,7 +41,16 @@ export interface AppSettings {
   delete401: boolean
   autoReenable: boolean
   exportDirectory: string
+  authImport: AuthImportSettings
   schedule: ScheduleSettings
+}
+
+export interface AuthImportSettings {
+  sourceDirectory: string
+  archiveDirectory: string
+  moveImported: boolean
+  autoEnabled: boolean
+  autoCron: string
 }
 
 export interface ScheduleSettings {
@@ -51,7 +61,7 @@ export interface ScheduleSettings {
 
 export interface SchedulerStatus {
   enabled: boolean
-  mode: ScheduleMode
+  mode: string
   cron: string
   valid: boolean
   validationMessage: string
@@ -150,6 +160,34 @@ export interface QuotaBucketDetail {
   resetAt: string
 }
 
+export interface TokenUsageDetail {
+  inputTokens?: number | null
+  outputTokens?: number | null
+  totalTokens?: number | null
+}
+
+export interface UsageTokenTotals {
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cachedTokens: number
+  totalTokens: number
+}
+
+export interface ManagementUsageSummary {
+  fetchedAt: string
+  lastRequestAt: string
+  totalRequests: number
+  successCount: number
+  failureCount: number
+  failedRequests: number
+  todayRequests: number
+  todayTokens: number
+  apiKeyCount: number
+  modelCount: number
+  tokens: UsageTokenTotals
+}
+
 export interface CodexQuotaAccountDetail {
   name: string
   email: string
@@ -159,6 +197,7 @@ export interface CodexQuotaAccountDetail {
   error: string
   fetchedAt: string
   earliestResetAt: string
+  tokenUsage?: TokenUsageDetail
   fiveHour: QuotaBucketDetail
   weekly: QuotaBucketDetail
   codeReviewWeekly: QuotaBucketDetail
@@ -202,6 +241,29 @@ export interface InventorySyncResult {
   totalAccounts: number
   filteredAccounts: number
   syncedAt: string
+}
+
+export interface AuthImportFileResult {
+  path: string
+  name: string
+  ok: boolean
+  error: string
+  archived: boolean
+  archiveError: string
+}
+
+export interface AuthImportResult {
+  requested: number
+  uploaded: number
+  failed: number
+  skipped: number
+  archived: number
+  archiveFailed: number
+  archiveDirectory: string
+  synced: boolean
+  syncError: string
+  inventory: InventorySyncResult
+  results: AuthImportFileResult[]
 }
 
 export interface MaintainOptions {
@@ -280,7 +342,7 @@ export interface MaintainResult {
 }
 
 export interface TaskProgress {
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota'
+  kind: TaskKind
   phase: string
   current: number
   total: number
@@ -289,14 +351,14 @@ export interface TaskProgress {
 }
 
 export interface TaskFinished {
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota'
+  kind: TaskKind
   status: string
   message: string
 }
 
 export interface LogEntry {
   id?: string
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota'
+  kind: TaskKind
   level: string
   message: string
   timestamp: string

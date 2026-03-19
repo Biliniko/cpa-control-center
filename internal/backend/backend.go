@@ -13,15 +13,21 @@ type EventEmitter interface {
 }
 
 type Backend struct {
-	store     *Store
-	client    *Client
-	logger    *Logger
-	emitter   EventEmitter
-	scheduler *schedulerRuntime
+	store               *Store
+	client              *Client
+	logger              *Logger
+	emitter             EventEmitter
+	scheduler           *schedulerRuntime
+	authImportScheduler *authImportSchedulerRuntime
 
 	mu         sync.Mutex
 	activeKind string
 	cancelFunc context.CancelFunc
+
+	pendingScheduledMode  string
+	pendingScheduledCron  string
+	pendingAuthImport     bool
+	pendingAuthImportCron string
 }
 
 var errTaskAlreadyRunning = errors.New("task already running")
@@ -58,6 +64,7 @@ func New(dataDir string, emitter EventEmitter) (*Backend, error) {
 		emitter: emitter,
 	}
 	service.scheduler = newSchedulerRuntime(service)
+	service.authImportScheduler = newAuthImportSchedulerRuntime(service)
 
 	settings, err := store.LoadSettings()
 	if err != nil {
@@ -66,6 +73,7 @@ func New(dataDir string, emitter EventEmitter) (*Backend, error) {
 		return nil, err
 	}
 	service.scheduler.ApplySettings(settings)
+	service.authImportScheduler.ApplySettings(settings)
 
 	return service, nil
 }
@@ -85,6 +93,9 @@ func (b *Backend) Close() error {
 	var firstErr error
 	if b.scheduler != nil {
 		b.scheduler.Close()
+	}
+	if b.authImportScheduler != nil {
+		b.authImportScheduler.Close()
 	}
 	if err := b.logger.Close(); err != nil {
 		firstErr = err
@@ -124,6 +135,11 @@ func (b *Backend) saveSettings(input AppSettings) (AppSettings, error) {
 			return input, err
 		}
 	}
+	if input.AuthImport.AutoEnabled {
+		if err := validateAuthImportScheduleSettings(input.Locale, input.AuthImport); err != nil {
+			return input, err
+		}
+	}
 	if err := validateScanSettings(input.Locale, input.ScanStrategy, input.ScanBatchSize); err != nil {
 		return input, err
 	}
@@ -134,6 +150,9 @@ func (b *Backend) saveSettings(input AppSettings) (AppSettings, error) {
 	}
 	if b.scheduler != nil {
 		b.scheduler.ApplySettings(settings)
+	}
+	if b.authImportScheduler != nil {
+		b.authImportScheduler.ApplySettings(settings)
 	}
 	b.emitLog("scan", "info", msg(settings.Locale, "settings.saved", stringOr(settings.BaseURL, "(empty)")))
 	return settings, nil
@@ -253,6 +272,13 @@ func (b *Backend) GetSchedulerStatus() SchedulerStatus {
 	return b.scheduler.Status()
 }
 
+func (b *Backend) GetAuthImportSchedulerStatus() SchedulerStatus {
+	if b.authImportScheduler == nil {
+		return SchedulerStatus{}
+	}
+	return b.authImportScheduler.Status()
+}
+
 func (b *Backend) GetDashboardSummary() (DashboardSummary, error) {
 	settings, err := b.store.LoadSettings()
 	if err != nil {
@@ -364,10 +390,64 @@ func (b *Backend) beginTask(kind string, locale string) (context.Context, error)
 }
 
 func (b *Backend) endTask() {
+	var pendingMode string
+	var pendingCron string
+
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.activeKind = ""
 	b.cancelFunc = nil
+	if b.pendingScheduledMode != "" {
+		pendingMode = b.pendingScheduledMode
+		pendingCron = b.pendingScheduledCron
+		b.pendingScheduledMode = ""
+		b.pendingScheduledCron = ""
+	} else if b.pendingAuthImport {
+		pendingMode = "import"
+		pendingCron = b.pendingAuthImportCron
+		b.pendingAuthImport = false
+		b.pendingAuthImportCron = ""
+	}
+	b.mu.Unlock()
+
+	if pendingMode != "" {
+		b.triggerQueuedScheduledTask(pendingMode, pendingCron)
+	}
+}
+
+func (b *Backend) queueScheduledTask(mode string, cronExpr string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	alreadyQueued := b.pendingScheduledMode == mode && b.pendingScheduledCron == cronExpr
+	b.pendingScheduledMode = mode
+	b.pendingScheduledCron = cronExpr
+	return alreadyQueued
+}
+
+func (b *Backend) queueScheduledAuthImport(cronExpr string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	alreadyQueued := b.pendingAuthImport
+	b.pendingAuthImport = true
+	b.pendingAuthImportCron = cronExpr
+	return alreadyQueued
+}
+
+func (b *Backend) triggerQueuedScheduledTask(mode string, cronExpr string) {
+	if mode == "import" {
+		if b.authImportScheduler != nil {
+			go b.authImportScheduler.triggerQueued(cronExpr)
+			return
+		}
+		go b.executeScheduledTask("import", cronExpr)
+		return
+	}
+	if b.scheduler != nil {
+		go b.scheduler.triggerQueued(mode, cronExpr)
+		return
+	}
+	go b.executeScheduledTask(mode, cronExpr)
 }
 
 func (b *Backend) emitLog(kind string, level string, message string) {

@@ -3,6 +3,8 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,11 +12,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeCPAServer struct {
 	mu         sync.Mutex
 	files      []map[string]any
+	uploaded   []string
 	deleted    []string
 	disabled   []string
 	reenabled  []string
@@ -75,6 +79,22 @@ func (f *fakeCPAServer) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files":
 		f.fetches++
 		_ = json.NewEncoder(w).Encode(map[string]any{"files": f.files})
+	case r.Method == http.MethodPost && r.URL.Path == "/v0/management/auth-files":
+		name := r.URL.Query().Get("name")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+			return
+		}
+		payload["name"] = name
+		f.uploaded = append(f.uploaded, name)
+		f.files = append(f.files, payload)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
 		f.apiCalls++
 		var body struct {
@@ -234,6 +254,202 @@ func TestClientTestConnectionFallsBackToAuthFilesOnLegacyCPA(t *testing.T) {
 	}
 }
 
+func TestImportAuthFilesUploadsAndSyncsInventory(t *testing.T) {
+	serverState := &fakeCPAServer{}
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    4,
+		ActionWorkers:   2,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	validPath := filepath.Join(dataDir, "codex-auth.json")
+	if err := os.WriteFile(validPath, []byte(`{"type":"codex","provider":"codex","auth_index":"healthy","id_token":{"chatgpt_account_id":"acct-import","plan_type":"pro"}}`), 0o644); err != nil {
+		t.Fatalf("Write valid auth file: %v", err)
+	}
+	invalidPath := filepath.Join(dataDir, "broken.json")
+	if err := os.WriteFile(invalidPath, []byte(`{"type":"codex"`), 0o644); err != nil {
+		t.Fatalf("Write broken auth file: %v", err)
+	}
+
+	result, err := service.ImportAuthFiles([]string{validPath, invalidPath})
+	if err != nil {
+		t.Fatalf("ImportAuthFiles: %v", err)
+	}
+	if result.Requested != 2 || result.Uploaded != 1 || result.Failed != 1 || result.Skipped != 0 {
+		t.Fatalf("unexpected import result: %+v", result)
+	}
+	if !result.Synced || result.Inventory.TotalAccounts != 1 {
+		t.Fatalf("expected synced inventory after import, got %+v", result)
+	}
+
+	serverState.mu.Lock()
+	uploaded := append([]string(nil), serverState.uploaded...)
+	serverState.mu.Unlock()
+	if len(uploaded) != 1 || uploaded[0] != "codex-auth.json" {
+		t.Fatalf("unexpected uploaded names: %v", uploaded)
+	}
+
+	snapshot, err := service.GetDashboardSnapshot()
+	if err != nil {
+		t.Fatalf("GetDashboardSnapshot: %v", err)
+	}
+	if snapshot.Summary.TotalAccounts != 1 || snapshot.Summary.FilteredAccounts != 1 || snapshot.Summary.PendingCount != 1 {
+		t.Fatalf("unexpected dashboard snapshot after import: %+v", snapshot.Summary)
+	}
+}
+
+func TestImportAuthDirectoryPreservesRelativeNames(t *testing.T) {
+	serverState := &fakeCPAServer{}
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    4,
+		ActionWorkers:   2,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	authDir := filepath.Join(dataDir, "auth")
+	if err := os.MkdirAll(filepath.Join(authDir, "codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "codex", "nested.json"), []byte(`{"type":"codex","provider":"codex","auth_index":"nested","id_token":{"chatgpt_account_id":"acct-nested","plan_type":"pro"}}`), 0o644); err != nil {
+		t.Fatalf("Write nested auth file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "readme.txt"), []byte("skip"), 0o644); err != nil {
+		t.Fatalf("Write non-json file: %v", err)
+	}
+
+	result, err := service.ImportAuthDirectory(authDir)
+	if err != nil {
+		t.Fatalf("ImportAuthDirectory: %v", err)
+	}
+	if result.Requested != 1 || result.Uploaded != 1 || !result.Synced {
+		t.Fatalf("unexpected directory import result: %+v", result)
+	}
+
+	serverState.mu.Lock()
+	uploaded := append([]string(nil), serverState.uploaded...)
+	serverState.mu.Unlock()
+	if len(uploaded) != 1 || uploaded[0] != "codex/nested.json" {
+		t.Fatalf("expected relative remote name, got %v", uploaded)
+	}
+}
+
+func TestImportAuthDirectoryArchivesUploadedFilesAndSkipsArchiveSubtree(t *testing.T) {
+	serverState := &fakeCPAServer{}
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	authDir := filepath.Join(dataDir, "auth")
+	archiveDir := filepath.Join(authDir, "archived")
+	if err := os.MkdirAll(filepath.Join(authDir, "codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll source: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(archiveDir, "codex"), 0o755); err != nil {
+		t.Fatalf("MkdirAll archive: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(authDir, "codex", "nested.json"), []byte(`{"type":"codex","provider":"codex","auth_index":"nested","id_token":{"chatgpt_account_id":"acct-nested","plan_type":"pro"}}`), 0o644); err != nil {
+		t.Fatalf("Write source auth file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(archiveDir, "codex", "old.json"), []byte(`{"type":"codex","provider":"codex","auth_index":"old","id_token":{"chatgpt_account_id":"acct-old","plan_type":"pro"}}`), 0o644); err != nil {
+		t.Fatalf("Write archived auth file: %v", err)
+	}
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    4,
+		ActionWorkers:   2,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+		AuthImport: AuthImportSettings{
+			ArchiveDirectory: archiveDir,
+			MoveImported:     true,
+		},
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	result, err := service.ImportAuthDirectory(authDir)
+	if err != nil {
+		t.Fatalf("ImportAuthDirectory: %v", err)
+	}
+	if result.Requested != 1 || result.Uploaded != 1 || result.Archived != 1 || result.ArchiveFailed != 0 {
+		t.Fatalf("unexpected archived import result: %+v", result)
+	}
+
+	if _, err := os.Stat(filepath.Join(authDir, "codex", "nested.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected source file to be moved, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(archiveDir, "codex", "nested.json")); err != nil {
+		t.Fatalf("expected archived file to exist: %v", err)
+	}
+
+	serverState.mu.Lock()
+	uploaded := append([]string(nil), serverState.uploaded...)
+	serverState.mu.Unlock()
+	if len(uploaded) != 1 || uploaded[0] != "codex/nested.json" {
+		t.Fatalf("expected only source file to upload, got %v", uploaded)
+	}
+}
+
 func TestSyncInventoryEmitsInventoryTaskEvents(t *testing.T) {
 	serverState := &fakeCPAServer{
 		files: []map[string]any{
@@ -345,6 +561,10 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 					"status_code": 200,
 					"body": `{
 						"plan_type":"team",
+						"usage_summary":{
+							"prompt_tokens":1200,
+							"completion_tokens":345
+						},
 						"rate_limits":{
 							"five_hour":{"used_percent":25,"reset_at":"2026-03-12T05:00:00Z","window_seconds":18000},
 							"weekly":{"used_percent":40,"reset_at":"2026-03-18T00:00:00Z","window_seconds":604800}
@@ -453,6 +673,9 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 	if freeAccount.EarliestResetAt != "2026-03-18T00:00:00Z" {
 		t.Fatalf("unexpected free earliest reset: %+v", freeAccount)
 	}
+	if freeAccount.TokenUsage.InputTokens != nil || freeAccount.TokenUsage.OutputTokens != nil || freeAccount.TokenUsage.TotalTokens != nil {
+		t.Fatalf("free account should not contain token usage: %+v", freeAccount.TokenUsage)
+	}
 
 	teamAccount := snapshot.Accounts[1]
 	if teamAccount.PlanType != "team" || !teamAccount.Success {
@@ -464,6 +687,15 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 	if teamAccount.EarliestResetAt != "2026-03-12T05:00:00Z" {
 		t.Fatalf("unexpected team earliest reset: %+v", teamAccount)
 	}
+	if teamAccount.TokenUsage.InputTokens == nil || *teamAccount.TokenUsage.InputTokens != 1200 {
+		t.Fatalf("unexpected team input tokens: %+v", teamAccount.TokenUsage)
+	}
+	if teamAccount.TokenUsage.OutputTokens == nil || *teamAccount.TokenUsage.OutputTokens != 345 {
+		t.Fatalf("unexpected team output tokens: %+v", teamAccount.TokenUsage)
+	}
+	if teamAccount.TokenUsage.TotalTokens == nil || *teamAccount.TokenUsage.TotalTokens != 1545 {
+		t.Fatalf("unexpected team total tokens: %+v", teamAccount.TokenUsage)
+	}
 
 	failedAccount := snapshot.Accounts[2]
 	if failedAccount.Success || failedAccount.Error == "" {
@@ -471,6 +703,9 @@ func TestGetCodexQuotaSnapshotGroupsPlansAndKeepsPartialFailures(t *testing.T) {
 	}
 	if failedAccount.FiveHour.RemainingPercent != nil || failedAccount.Weekly.RemainingPercent != nil || failedAccount.CodeReviewWeekly.RemainingPercent != nil {
 		t.Fatalf("failed account should not contain quota values: %+v", failedAccount)
+	}
+	if failedAccount.TokenUsage.InputTokens != nil || failedAccount.TokenUsage.OutputTokens != nil || failedAccount.TokenUsage.TotalTokens != nil {
+		t.Fatalf("failed account should not contain token usage: %+v", failedAccount.TokenUsage)
 	}
 }
 
@@ -694,6 +929,34 @@ func TestParseQuotaBucketResultMapsFreePrimaryWindowToWeekly(t *testing.T) {
 	}
 	if result.codeReviewWeekly == nil || result.codeReviewWeekly.resetAt != "2026-03-20T08:41:01Z" || result.codeReviewWeekly.remainingPercent != 100 {
 		t.Fatalf("unexpected free code-review bucket: %+v", result.codeReviewWeekly)
+	}
+}
+
+func TestParseTokenUsageDetailPrefersSummaryGroupAndDerivesTotal(t *testing.T) {
+	payload := map[string]any{
+		"usage_by_model": []any{
+			map[string]any{
+				"model":         "gpt-4.1",
+				"input_tokens":  12,
+				"output_tokens": 3,
+				"total_tokens":  15,
+			},
+		},
+		"usage_summary": map[string]any{
+			"prompt_tokens":     1200,
+			"completion_tokens": 300,
+		},
+	}
+
+	result := parseTokenUsageDetail(payload)
+	if result.InputTokens == nil || *result.InputTokens != 1200 {
+		t.Fatalf("unexpected input token usage: %+v", result)
+	}
+	if result.OutputTokens == nil || *result.OutputTokens != 300 {
+		t.Fatalf("unexpected output token usage: %+v", result)
+	}
+	if result.TotalTokens == nil || *result.TotalTokens != 1500 {
+		t.Fatalf("unexpected total token usage: %+v", result)
 	}
 }
 
@@ -1888,7 +2151,107 @@ func TestSchedulerStatusValidationAndScheduledScan(t *testing.T) {
 	}
 }
 
-func TestScheduledTaskSkipsWhenAnotherTaskIsRunning(t *testing.T) {
+func TestAuthImportSchedulerStatusValidationAndScheduledRun(t *testing.T) {
+	serverState := &fakeCPAServer{}
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	authDir := filepath.Join(dataDir, "auth-import")
+	archiveDir := filepath.Join(dataDir, "auth-archive")
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll authDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "scheduled.json"), []byte(`{"type":"codex","provider":"codex","auth_index":"scheduled","id_token":{"chatgpt_account_id":"acct-scheduled-import","plan_type":"pro"}}`), 0o644); err != nil {
+		t.Fatalf("Write scheduled auth file: %v", err)
+	}
+
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+		AutoReenable:    true,
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+		AuthImport: AuthImportSettings{
+			SourceDirectory:  authDir,
+			ArchiveDirectory: archiveDir,
+			MoveImported:     true,
+			AutoEnabled:      true,
+			AutoCron:         "0 * * * *",
+		},
+	}
+
+	if _, err := service.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	status := service.GetAuthImportSchedulerStatus()
+	if !status.Enabled || !status.Valid || status.Mode != "import" || status.NextRunAt == "" {
+		t.Fatalf("unexpected auth import scheduler status after save: %+v", status)
+	}
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+		AuthImport: AuthImportSettings{
+			AutoEnabled: true,
+			AutoCron:    "0 * * * *",
+		},
+	}); err == nil {
+		t.Fatal("expected missing auth import source directory save to fail")
+	}
+
+	service.authImportScheduler.execute(service.authImportScheduler.version, "0 * * * *")
+
+	updatedStatus := service.GetAuthImportSchedulerStatus()
+	if updatedStatus.LastStatus != "success" || updatedStatus.LastStartedAt == "" || updatedStatus.LastFinishedAt == "" {
+		t.Fatalf("unexpected auth import scheduler runtime status: %+v", updatedStatus)
+	}
+
+	serverState.mu.Lock()
+	uploaded := append([]string(nil), serverState.uploaded...)
+	serverState.mu.Unlock()
+	if len(uploaded) != 1 || uploaded[0] != "scheduled.json" {
+		t.Fatalf("unexpected uploaded names after scheduled import: %v", uploaded)
+	}
+
+	if _, err := os.Stat(filepath.Join(archiveDir, "scheduled.json")); err != nil {
+		t.Fatalf("expected scheduled file to be archived: %v", err)
+	}
+
+	snapshot, err := service.GetDashboardSnapshot()
+	if err != nil {
+		t.Fatalf("GetDashboardSnapshot: %v", err)
+	}
+	if snapshot.Summary.FilteredAccounts != 1 || snapshot.Summary.PendingCount != 1 {
+		t.Fatalf("unexpected snapshot after scheduled auth import: %+v", snapshot.Summary)
+	}
+}
+
+func TestScheduledTaskQueuesAndRunsAfterAnotherTaskCompletes(t *testing.T) {
 	serverState := &fakeCPAServer{
 		files: []map[string]any{
 			{
@@ -1932,12 +2295,12 @@ func TestScheduledTaskSkipsWhenAnotherTaskIsRunning(t *testing.T) {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 
-	ctx, err := service.beginTask("scan", localeEnglish)
-	if err != nil {
+	if _, err := service.beginTask("import", localeEnglish); err != nil {
 		t.Fatalf("beginTask: %v", err)
 	}
+	taskActive := true
 	defer func() {
-		if ctx != nil {
+		if taskActive {
 			service.endTask()
 		}
 	}()
@@ -1945,13 +2308,146 @@ func TestScheduledTaskSkipsWhenAnotherTaskIsRunning(t *testing.T) {
 	service.scheduler.execute(service.scheduler.version, "maintain", "0 * * * *")
 
 	status := service.GetSchedulerStatus()
-	if status.LastStatus != "skipped" {
-		t.Fatalf("expected skipped scheduler status, got %+v", status)
-	}
-	if len(serverState.deleted) != 0 || len(serverState.disabled) != 0 || len(serverState.reenabled) != 0 {
-		t.Fatalf("scheduled task should not have executed actions: deleted=%v disabled=%v reenabled=%v", serverState.deleted, serverState.disabled, serverState.reenabled)
+	if status.LastStatus != "queued" {
+		t.Fatalf("expected queued scheduler status, got %+v", status)
 	}
 
-	ctx = nil
+	serverState.mu.Lock()
+	fetchesBefore := serverState.fetches
+	deletedBefore := len(serverState.deleted)
+	disabledBefore := len(serverState.disabled)
+	reenabledBefore := len(serverState.reenabled)
+	serverState.mu.Unlock()
+	if fetchesBefore != 0 || deletedBefore != 0 || disabledBefore != 0 || reenabledBefore != 0 {
+		t.Fatalf("scheduled task should wait for active task: fetches=%d deleted=%d disabled=%d reenabled=%d", fetchesBefore, deletedBefore, disabledBefore, reenabledBefore)
+	}
+
 	service.endTask()
+	taskActive = false
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		status = service.GetSchedulerStatus()
+		serverState.mu.Lock()
+		fetchesAfter := serverState.fetches
+		serverState.mu.Unlock()
+		if status.LastStatus == "success" && fetchesAfter > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	status = service.GetSchedulerStatus()
+	if status.LastStatus != "success" {
+		t.Fatalf("expected queued scheduler status to finish successfully, got %+v", status)
+	}
+
+	snapshot, err := service.GetDashboardSnapshot()
+	if err != nil {
+		t.Fatalf("GetDashboardSnapshot: %v", err)
+	}
+	if snapshot.Summary.FilteredAccounts != 1 || snapshot.Summary.NormalCount != 1 {
+		t.Fatalf("unexpected snapshot after queued scheduled maintain: %+v", snapshot.Summary)
+	}
+}
+
+func TestScheduledAuthImportQueuesAndRunsAfterActiveTask(t *testing.T) {
+	serverState := &fakeCPAServer{}
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	authDir := filepath.Join(dataDir, "auth-import")
+	if err := os.MkdirAll(authDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll authDir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(authDir, "queued.json"), []byte(`{"type":"codex","provider":"codex","auth_index":"queued","id_token":{"chatgpt_account_id":"acct-queued-import","plan_type":"pro"}}`), 0o644); err != nil {
+		t.Fatalf("Write queued auth file: %v", err)
+	}
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		ExportDirectory: filepath.Join(dataDir, "exports"),
+		AuthImport: AuthImportSettings{
+			SourceDirectory: authDir,
+			AutoEnabled:     true,
+			AutoCron:        "0 * * * *",
+		},
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if _, err := service.beginTask("maintain", localeEnglish); err != nil {
+		t.Fatalf("beginTask: %v", err)
+	}
+	taskActive := true
+	defer func() {
+		if taskActive {
+			service.endTask()
+		}
+	}()
+
+	service.authImportScheduler.execute(service.authImportScheduler.version, "0 * * * *")
+
+	status := service.GetAuthImportSchedulerStatus()
+	if status.LastStatus != "queued" {
+		t.Fatalf("expected queued auth import status, got %+v", status)
+	}
+
+	serverState.mu.Lock()
+	queuedUploads := append([]string(nil), serverState.uploaded...)
+	serverState.mu.Unlock()
+	if len(queuedUploads) != 0 {
+		t.Fatalf("expected queued import to wait for active task, uploaded=%v", queuedUploads)
+	}
+
+	service.endTask()
+	taskActive = false
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		status = service.GetAuthImportSchedulerStatus()
+		serverState.mu.Lock()
+		uploadedCount := len(serverState.uploaded)
+		serverState.mu.Unlock()
+		if status.LastStatus == "success" && uploadedCount == 1 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	status = service.GetAuthImportSchedulerStatus()
+	if status.LastStatus != "success" {
+		t.Fatalf("expected queued auth import to finish successfully, got %+v", status)
+	}
+
+	serverState.mu.Lock()
+	uploaded := append([]string(nil), serverState.uploaded...)
+	serverState.mu.Unlock()
+	if len(uploaded) != 1 || uploaded[0] != "queued.json" {
+		t.Fatalf("unexpected uploaded names after queued import: %v", uploaded)
+	}
+
+	snapshot, err := service.GetDashboardSnapshot()
+	if err != nil {
+		t.Fatalf("GetDashboardSnapshot: %v", err)
+	}
+	if snapshot.Summary.FilteredAccounts != 1 || snapshot.Summary.PendingCount != 1 {
+		t.Fatalf("unexpected snapshot after queued auth import: %+v", snapshot.Summary)
+	}
 }
