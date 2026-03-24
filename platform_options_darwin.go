@@ -9,14 +9,7 @@ import (
 
 func applyPlatformOptions(appOptions *options.App) {
 	appOptions.Mac = &macopts.Options{
-		TitleBar: &macopts.TitleBar{
-			TitlebarAppearsTransparent: true,
-			HideTitle:                  false,
-			HideTitleBar:               false,
-			FullSizeContent:            false,
-			UseToolbar:                 false,
-			HideToolbarSeparator:       true,
-		},
+		TitleBar:             macopts.TitleBarHiddenInset(),
 		Appearance:           macopts.DefaultAppearance,
 		WebviewIsTransparent: false,
 		WindowIsTranslucent:  false,

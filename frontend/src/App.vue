@@ -52,6 +52,7 @@ const startupFallbackMinWidth = 720
 const startupFallbackMinHeight = 480
 const viewportWidth = ref(window.innerWidth)
 const viewportHeight = ref(window.innerHeight)
+const isMacOS = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent)
 
 const navItems = computed<Array<{ key: ViewKey; label: string; caption: string }>>(() => [
   { key: 'dashboard', label: t('nav.dashboard'), caption: t('nav.dashboardCaption') },
@@ -111,6 +112,7 @@ const shellClasses = computed(() => ({
   'app-shell--wide': shellMode.value === 'wide',
   'app-shell--desktop': shellMode.value === 'desktop',
   'app-shell--compact': shellMode.value === 'compact',
+  'app-shell--macos': isMacOS,
 }))
 
 provide(shellModeKey, shellMode)
@@ -467,6 +469,7 @@ watch(debugVisible, (visible) => {
       class="app-viewport"
     >
       <div :key="shellRevision" class="app-shell" :class="shellClasses">
+        <div v-if="isMacOS" class="window-titlebar" aria-hidden="true" />
         <aside class="app-sidebar">
           <div>
             <p class="sidebar-kicker">{{ t('app.name') }}</p>
