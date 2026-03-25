@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -101,6 +102,10 @@ func (c *Client) FetchAuthFiles(ctx context.Context, settings AppSettings) ([]ma
 		}
 	}
 	return files, nil
+}
+
+func (c *Client) FetchManagementUsage(ctx context.Context, settings AppSettings) (map[string]any, error) {
+	return c.doRequest(ctx, settings, http.MethodGet, settings.BaseURL+"/v0/management/usage", nil)
 }
 
 func (c *Client) BuildAccountRecord(item map[string]any, previous *AccountRecord, timestamp string) AccountRecord {
@@ -360,6 +365,22 @@ func (c *Client) SetAccountDisabled(ctx context.Context, settings AppSettings, n
 	return result
 }
 
+func (c *Client) UploadAuthFile(ctx context.Context, settings AppSettings, name string, content []byte) error {
+	normalizedName := filepath.ToSlash(strings.TrimSpace(name))
+	normalizedName = strings.TrimPrefix(normalizedName, "./")
+	normalizedName = strings.TrimPrefix(normalizedName, "/")
+	if normalizedName == "" || path.Base(normalizedName) == "." || path.Base(normalizedName) == "/" {
+		return errors.New(msg(settings.Locale, "error.auth_import_invalid_name", name))
+	}
+	if !strings.HasSuffix(strings.ToLower(normalizedName), ".json") {
+		return errors.New(msg(settings.Locale, "error.auth_import_not_json", normalizedName))
+	}
+
+	endpoint := settings.BaseURL + "/v0/management/auth-files?name=" + url.QueryEscape(normalizedName)
+	_, err := c.doRawRequest(ctx, settings, http.MethodPost, endpoint, content, "application/json")
+	return err
+}
+
 func (c *Client) doManagedAccountRequest(
 	ctx context.Context,
 	settings AppSettings,
@@ -469,6 +490,56 @@ func (c *Client) doRequest(ctx context.Context, settings AppSettings, method str
 }
 
 func (c *Client) doRequestOnce(ctx context.Context, settings AppSettings, method string, endpoint string, payload any) (map[string]any, bool, error) {
+	var body []byte
+	if payload != nil {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, false, err
+		}
+		body = data
+	}
+	return c.doRequestBytesOnce(ctx, settings, method, endpoint, body, "application/json")
+}
+
+func (c *Client) doRawRequest(ctx context.Context, settings AppSettings, method string, endpoint string, body []byte, contentType string) (map[string]any, error) {
+	if strings.TrimSpace(settings.BaseURL) == "" {
+		return nil, errors.New(msg(settings.Locale, "error.base_url_required"))
+	}
+	if strings.TrimSpace(settings.ManagementToken) == "" {
+		return nil, errors.New(msg(settings.Locale, "error.management_token_required"))
+	}
+
+	attempts := settings.Retries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		response, retryable, err := c.doRequestBytesOnce(ctx, settings, method, endpoint, body, contentType)
+		if err == nil {
+			return response, nil
+		}
+		lastErr = err
+		if !retryable || attempt == attempts || ctx.Err() != nil {
+			return nil, lastErr
+		}
+		if err := waitForRetry(ctx, c.retryDelay*time.Duration(attempt)); err != nil {
+			return nil, err
+		}
+	}
+
+	return nil, lastErr
+}
+
+func (c *Client) doRequestBytesOnce(
+	ctx context.Context,
+	settings AppSettings,
+	method string,
+	endpoint string,
+	body []byte,
+	contentType string,
+) (map[string]any, bool, error) {
 	timeout := time.Duration(settings.TimeoutSeconds)
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -477,12 +548,8 @@ func (c *Client) doRequestOnce(ctx context.Context, settings AppSettings, method
 	defer cancel()
 
 	var bodyReader io.Reader
-	if payload != nil {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return nil, false, err
-		}
-		bodyReader = bytes.NewReader(data)
+	if len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
 	}
 
 	req, err := http.NewRequestWithContext(requestCtx, method, endpoint, bodyReader)
@@ -491,8 +558,8 @@ func (c *Client) doRequestOnce(ctx context.Context, settings AppSettings, method
 	}
 	req.Header.Set("Authorization", "Bearer "+settings.ManagementToken)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if len(body) > 0 && strings.TrimSpace(contentType) != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 
 	resp, err := c.httpClient.Do(req)

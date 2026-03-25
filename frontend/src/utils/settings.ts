@@ -1,9 +1,19 @@
-import type { AppSettings, ScheduleSettings } from '@/types'
+import type { AppSettings, AuthImportSettings, ScheduleSettings } from '@/types'
 import { detectPreferredLocale } from '@/utils/locale'
 
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
 const fallbackTranslate: Translate = (key) => key
+const defaultScheduleCron = '0 * * * *'
+const defaultAuthImportAutoCron = '10 * * * *'
+const defaultQuotaAutoRefreshCron = '20 */2 * * *'
+
+export type ScheduleConflictJob = 'schedule' | 'authImport' | 'quotaAutoRefresh'
+
+export interface ScheduleConflict {
+  jobs: [ScheduleConflictJob, ScheduleConflictJob]
+  at: string
+}
 
 export function createDefaultSettings(): AppSettings {
   return {
@@ -31,10 +41,11 @@ export function createDefaultSettings(): AppSettings {
     quotaCheckEnterprise: true,
     quotaFreeMaxAccounts: 100,
     quotaAutoRefreshEnabled: false,
-    quotaAutoRefreshCron: '',
+    quotaAutoRefreshCron: defaultQuotaAutoRefreshCron,
     delete401: true,
     autoReenable: true,
     exportDirectory: '',
+    authImport: createDefaultAuthImportSettings(),
     schedule: createDefaultScheduleSettings(),
   }
 }
@@ -86,6 +97,16 @@ export function validateSettings(settings: AppSettings, t: Translate = fallbackT
       errors.quotaAutoRefreshCron = t('validation.quotaAutoRefreshCronInvalid')
     }
   }
+  if (settings.authImport.autoEnabled) {
+    if (!settings.authImport.sourceDirectory.trim()) {
+      errors.authImportSourceDirectory = t('validation.authImportSourceDirectoryRequired')
+    }
+    if (!settings.authImport.autoCron.trim()) {
+      errors.authImportAutoCron = t('validation.authImportAutoCronRequired')
+    } else if (!isValidCronExpression(settings.authImport.autoCron)) {
+      errors.authImportAutoCron = t('validation.authImportAutoCronInvalid')
+    }
+  }
   if (settings.schedule.enabled) {
     if (!['scan', 'maintain'].includes(settings.schedule.mode)) {
       errors.scheduleMode = t('validation.scheduleModeInvalid')
@@ -100,12 +121,65 @@ export function validateSettings(settings: AppSettings, t: Translate = fallbackT
   return errors
 }
 
+export function createDefaultAuthImportSettings(): AuthImportSettings {
+  return {
+    sourceDirectory: '',
+    archiveDirectory: '',
+    moveImported: false,
+    autoEnabled: false,
+    autoCron: defaultAuthImportAutoCron,
+  }
+}
+
 export function createDefaultScheduleSettings(): ScheduleSettings {
   return {
     enabled: false,
     mode: 'scan',
-    cron: '',
+    cron: defaultScheduleCron,
   }
+}
+
+export function listScheduleConflicts(
+  settings: AppSettings,
+  now = new Date(),
+  horizonDays = 14,
+): ScheduleConflict[] {
+  const jobs = collectEnabledScheduleJobs(settings)
+  if (jobs.length < 2) {
+    return []
+  }
+
+  const start = new Date(now)
+  start.setSeconds(0, 0)
+  const totalPairs = (jobs.length * (jobs.length - 1)) / 2
+  const deadline = start.getTime() + (horizonDays * 24 * 60 * 60 * 1000)
+  const seenPairs = new Set<string>()
+  const conflicts: ScheduleConflict[] = []
+
+  for (let minute = start.getTime(); minute <= deadline && seenPairs.size < totalPairs; minute += 60_000) {
+    const current = new Date(minute)
+    const matching = jobs.filter((job) => cronMatchesDate(job.cron, current))
+    if (matching.length < 2) {
+      continue
+    }
+
+    for (let index = 0; index < matching.length; index += 1) {
+      for (let inner = index + 1; inner < matching.length; inner += 1) {
+        const pair = [matching[index].job, matching[inner].job].sort() as [ScheduleConflictJob, ScheduleConflictJob]
+        const key = pair.join(':')
+        if (seenPairs.has(key)) {
+          continue
+        }
+        seenPairs.add(key)
+        conflicts.push({
+          jobs: [matching[index].job, matching[inner].job],
+          at: current.toISOString(),
+        })
+      }
+    }
+  }
+
+  return conflicts
 }
 
 export function isValidCronExpression(value: string): boolean {
@@ -152,6 +226,22 @@ export function cronMatchesDate(expression: string, date: Date): boolean {
 
 function isValidCronField(field: string, min: number, max: number): boolean {
   return field.split(',').every((segment) => isValidCronSegment(segment.trim(), min, max))
+}
+
+function collectEnabledScheduleJobs(settings: AppSettings): Array<{ job: ScheduleConflictJob; cron: string }> {
+  const jobs: Array<{ job: ScheduleConflictJob; cron: string }> = []
+
+  if (settings.schedule.enabled && settings.schedule.cron.trim() && isValidCronExpression(settings.schedule.cron)) {
+    jobs.push({ job: 'schedule', cron: settings.schedule.cron.trim() })
+  }
+  if (settings.authImport.autoEnabled && settings.authImport.autoCron.trim() && isValidCronExpression(settings.authImport.autoCron)) {
+    jobs.push({ job: 'authImport', cron: settings.authImport.autoCron.trim() })
+  }
+  if (settings.quotaAutoRefreshEnabled && settings.quotaAutoRefreshCron.trim() && isValidCronExpression(settings.quotaAutoRefreshCron)) {
+    jobs.push({ job: 'quotaAutoRefresh', cron: settings.quotaAutoRefreshCron.trim() })
+  }
+
+  return jobs
 }
 
 function cronFieldMatches(field: string, value: number, min: number, max: number): boolean {

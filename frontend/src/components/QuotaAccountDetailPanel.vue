@@ -21,6 +21,15 @@ const bucketEntries = computed(() => [
   { key: 'codeReviewWeekly', label: t('quotas.buckets.codeReviewWeekly'), bucket: props.account.codeReviewWeekly },
 ])
 
+const tokenEntries = computed(() => {
+  const tokenUsage = props.account.tokenUsage ?? {}
+  return [
+    { key: 'total', label: t('quotas.tokens.total'), value: tokenUsage.totalTokens ?? null },
+    { key: 'input', label: t('quotas.tokens.input'), value: tokenUsage.inputTokens ?? null },
+    { key: 'output', label: t('quotas.tokens.output'), value: tokenUsage.outputTokens ?? null },
+  ]
+})
+
 function planLabel(value: string) {
   const normalized = normalizeQuotaPlanType(value)
   if (normalized === 'unknown') {
@@ -67,6 +76,10 @@ function resetText(value: string) {
 
 function statusLabel(account: CodexQuotaAccountDetail) {
   return account.success ? t('quotas.matrix.success') : t('quotas.matrix.failed')
+}
+
+function tokenValue(value?: number | null) {
+  return typeof value === 'number' && !Number.isNaN(value) ? value.toLocaleString() : t('common.notAvailable')
 }
 
 function fetchedAtLabel() {
@@ -123,6 +136,21 @@ function fetchedAtLabel() {
               <strong>{{ t('quotas.matrix.failureReason') }}</strong>
               <p>{{ account.error || t('common.notAvailable') }}</p>
             </div>
+
+            <section class="quota-detail-modal__tokens" :aria-label="t('quotas.tokens.title')">
+              <p class="panel-kicker quota-detail-modal__section-kicker">{{ t('quotas.tokens.title') }}</p>
+              <div class="quota-detail-modal__tokens-grid">
+                <article
+                  v-for="entry in tokenEntries"
+                  :key="entry.key"
+                  class="quota-detail-modal__token-card"
+                  :class="{ 'quota-detail-modal__token-card--unknown': entry.value == null }"
+                >
+                  <span class="quota-detail-modal__token-label">{{ entry.label }}</span>
+                  <strong class="quota-detail-modal__token-value">{{ tokenValue(entry.value) }}</strong>
+                </article>
+              </div>
+            </section>
 
             <div class="quota-detail-modal__buckets">
               <article

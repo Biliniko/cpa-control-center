@@ -45,6 +45,7 @@ let debugListenersBound = false
 let viewportObserver: ResizeObserver | null = null
 let quotaAutoRefreshTimer: number | null = null
 let lastQuotaAutoRefreshKey = ''
+let pendingQuotaAutoRefresh = false
 
 const safeMinWidth = 1280
 const safeMinHeight = 720
@@ -170,6 +171,7 @@ function stopQuotaAutoRefresh() {
     window.clearInterval(quotaAutoRefreshTimer)
     quotaAutoRefreshTimer = null
   }
+  pendingQuotaAutoRefresh = false
 }
 
 function minuteKey(date: Date) {
@@ -180,19 +182,38 @@ function tryQuotaAutoRefresh(now = new Date()) {
   const settings = settingsStore.settings
   const cron = settings.quotaAutoRefreshCron.trim()
   if (!settings.quotaAutoRefreshEnabled || !cron || !isValidCronExpression(cron)) {
+    pendingQuotaAutoRefresh = false
     return
   }
   if (!settings.baseUrl || !settings.managementToken) {
+    pendingQuotaAutoRefresh = false
+    return
+  }
+  const currentMinuteKey = minuteKey(now)
+  const matchesCurrentMinute = cronMatchesDate(cron, now)
+  if (tasksStore.hasActiveTask) {
+    if (matchesCurrentMinute && lastQuotaAutoRefreshKey !== currentMinuteKey) {
+      lastQuotaAutoRefreshKey = currentMinuteKey
+      pendingQuotaAutoRefresh = true
+      emitDebug('quota', 'auto refresh queued', { cron, minute: currentMinuteKey })
+    }
     return
   }
   if (quotasStore.loading || tasksStore.hasActiveTask) {
     return
   }
-  const currentMinuteKey = minuteKey(now)
+  if (pendingQuotaAutoRefresh) {
+    pendingQuotaAutoRefresh = false
+    emitDebug('quota', 'auto refresh draining queued run', { cron, minute: currentMinuteKey })
+    void quotasStore.refreshSnapshot().catch((error) => {
+      emitDebugError('quota', 'queued auto refresh failed', error)
+    })
+    return
+  }
   if (lastQuotaAutoRefreshKey === currentMinuteKey) {
     return
   }
-  if (!cronMatchesDate(cron, now)) {
+  if (!matchesCurrentMinute) {
     return
   }
   lastQuotaAutoRefreshKey = currentMinuteKey

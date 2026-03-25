@@ -61,6 +61,7 @@ type quotaFetchOutcome struct {
 	record        AccountRecord
 	planType      string
 	usagePlanType string
+	tokenUsage    TokenUsageDetail
 	result        quotaBucketResult
 	err           error
 }
@@ -72,6 +73,34 @@ var planOrder = map[string]int{
 	"team":       3,
 	"business":   4,
 	"enterprise": 5,
+}
+
+var tokenUsageInputKeys = map[string]struct{}{
+	"inputtokens":      {},
+	"inputtokencount":  {},
+	"inputtokensused":  {},
+	"prompttokens":     {},
+	"prompttokencount": {},
+	"prompttokensused": {},
+}
+
+var tokenUsageOutputKeys = map[string]struct{}{
+	"completiontokens":     {},
+	"completiontokencount": {},
+	"completiontokensused": {},
+	"outputtokens":         {},
+	"outputtokencount":     {},
+	"outputtokensused":     {},
+}
+
+var tokenUsageTotalKeys = map[string]struct{}{
+	"tokenconsumption": {},
+	"tokenusage":       {},
+	"totaltokens":      {},
+	"totaltokencount":  {},
+	"totaltokensused":  {},
+	"tokensused":       {},
+	"usedtokens":       {},
 }
 
 func (b *Backend) GetCodexQuotaSnapshot() (CodexQuotaSnapshot, error) {
@@ -326,6 +355,7 @@ func quotaOutcomeFromUsageProbe(probe UsageProbeResult) quotaFetchOutcome {
 	}
 
 	outcome.usagePlanType = normalizeQuotaPlanType(stringValue(probe.Usage["plan_type"]))
+	outcome.tokenUsage = parseTokenUsageDetail(probe.Usage)
 	outcome.result, outcome.err = parseQuotaBucketResult(probe.Usage)
 	return outcome
 }
@@ -603,6 +633,7 @@ func buildQuotaAccountDetail(outcome quotaFetchOutcome, fetchedAt string) CodexQ
 		Provider:         outcome.record.Provider,
 		Success:          outcome.err == nil,
 		FetchedAt:        fetchedAt,
+		TokenUsage:       outcome.tokenUsage,
 		FiveHour:         emptyQuotaBucketDetail(planType, quotaBucketFiveHour),
 		Weekly:           emptyQuotaBucketDetail(planType, quotaBucketWeekly),
 		CodeReviewWeekly: emptyQuotaBucketDetail(planType, quotaBucketCodeReviewWeekly),
@@ -717,6 +748,180 @@ func parseQuotaBucketResult(payload map[string]any) (quotaBucketResult, error) {
 		weekly:           selectQuotaCandidateValue(candidates, quotaBucketWeekly, planType),
 		codeReviewWeekly: selectQuotaCandidateValue(candidates, quotaBucketCodeReviewWeekly, planType),
 	}, nil
+}
+
+type tokenUsageCandidate struct {
+	path         string
+	inputTokens  *int64
+	outputTokens *int64
+	totalTokens  *int64
+}
+
+func parseTokenUsageDetail(payload map[string]any) TokenUsageDetail {
+	candidates := collectTokenUsageCandidates("", payload)
+	selected := selectTokenUsageCandidate(candidates)
+	if selected == nil {
+		return TokenUsageDetail{}
+	}
+
+	detail := TokenUsageDetail{
+		InputTokens:  selected.inputTokens,
+		OutputTokens: selected.outputTokens,
+		TotalTokens:  selected.totalTokens,
+	}
+	if detail.TotalTokens == nil && detail.InputTokens != nil && detail.OutputTokens != nil {
+		detail.TotalTokens = int64Ptr(*detail.InputTokens + *detail.OutputTokens)
+	}
+	return detail
+}
+
+func collectTokenUsageCandidates(path string, value any) []tokenUsageCandidate {
+	var candidates []tokenUsageCandidate
+
+	switch typed := value.(type) {
+	case map[string]any:
+		if candidate, ok := buildTokenUsageCandidate(path, typed); ok {
+			candidates = append(candidates, candidate)
+		}
+		for key, child := range typed {
+			nextPath := key
+			if path != "" {
+				nextPath = path + "." + key
+			}
+			candidates = append(candidates, collectTokenUsageCandidates(nextPath, child)...)
+		}
+	case []any:
+		for index, child := range typed {
+			nextPath := "[" + stringValue(index) + "]"
+			if path != "" {
+				nextPath = path + nextPath
+			}
+			candidates = append(candidates, collectTokenUsageCandidates(nextPath, child)...)
+		}
+	}
+
+	return candidates
+}
+
+func buildTokenUsageCandidate(path string, payload map[string]any) (tokenUsageCandidate, bool) {
+	candidate := tokenUsageCandidate{
+		path:         strings.ToLower(path),
+		inputTokens:  tokenMetricValueFromAliases(payload, tokenUsageInputKeys),
+		outputTokens: tokenMetricValueFromAliases(payload, tokenUsageOutputKeys),
+		totalTokens:  tokenMetricValueFromAliases(payload, tokenUsageTotalKeys),
+	}
+	if candidate.inputTokens == nil && candidate.outputTokens == nil && candidate.totalTokens == nil {
+		return tokenUsageCandidate{}, false
+	}
+	return candidate, true
+}
+
+func selectTokenUsageCandidate(candidates []tokenUsageCandidate) *tokenUsageCandidate {
+	bestScore := math.MinInt
+	bestFieldCount := -1
+	bestPathLength := math.MaxInt
+	var best *tokenUsageCandidate
+
+	for index := range candidates {
+		score := tokenUsageCandidateScore(candidates[index])
+		fieldCount := tokenUsageFieldCount(candidates[index])
+		pathLength := len(candidates[index].path)
+		if score > bestScore ||
+			(score == bestScore && fieldCount > bestFieldCount) ||
+			(score == bestScore && fieldCount == bestFieldCount && pathLength < bestPathLength) {
+			bestScore = score
+			bestFieldCount = fieldCount
+			bestPathLength = pathLength
+			best = &candidates[index]
+		}
+	}
+
+	return best
+}
+
+func tokenUsageCandidateScore(candidate tokenUsageCandidate) int {
+	score := tokenUsageFieldCount(candidate) * 3
+	if candidate.totalTokens != nil {
+		score += 2
+	}
+	if candidate.inputTokens != nil && candidate.outputTokens != nil {
+		score += 2
+	}
+
+	path := candidate.path
+	switch {
+	case path == "":
+		score += 2
+	default:
+		score -= tokenUsagePathDepth(path)
+	}
+
+	if strings.Contains(path, "summary") || strings.Contains(path, "aggregate") || strings.Contains(path, "overall") || strings.Contains(path, "totals") {
+		score += 6
+	}
+	if strings.Contains(path, "usage") || strings.Contains(path, "consumption") {
+		score += 2
+	}
+	if strings.Contains(path, "token") {
+		score += 3
+	}
+	if strings.Contains(path, "[") {
+		score -= 3
+	}
+	if strings.Contains(path, "model") || strings.Contains(path, "project") || strings.Contains(path, "item") {
+		score -= 3
+	}
+	if strings.Contains(path, "rate_limit") || strings.Contains(path, "rate_limits") || strings.Contains(path, "window") || strings.Contains(path, "remaining") || strings.Contains(path, "reset") || strings.Contains(path, "available") || strings.Contains(path, "limit") {
+		score -= 6
+	}
+
+	return score
+}
+
+func tokenUsageFieldCount(candidate tokenUsageCandidate) int {
+	count := 0
+	if candidate.inputTokens != nil {
+		count++
+	}
+	if candidate.outputTokens != nil {
+		count++
+	}
+	if candidate.totalTokens != nil {
+		count++
+	}
+	return count
+}
+
+func tokenUsagePathDepth(path string) int {
+	if path == "" {
+		return 0
+	}
+	return strings.Count(path, ".") + strings.Count(path, "[") + 1
+}
+
+func tokenMetricValueFromAliases(payload map[string]any, aliases map[string]struct{}) *int64 {
+	for key, value := range payload {
+		if _, ok := aliases[normalizeTokenMetricKey(key)]; !ok {
+			continue
+		}
+		parsed, ok := int64ValueFromAny(value)
+		if !ok {
+			continue
+		}
+		return int64Ptr(parsed)
+	}
+	return nil
+}
+
+func normalizeTokenMetricKey(key string) string {
+	var builder strings.Builder
+	builder.Grow(len(key))
+	for _, r := range strings.ToLower(strings.TrimSpace(key)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }
 
 func collectQuotaCandidates(path string, value any) []quotaCandidate {
@@ -1050,4 +1255,17 @@ func floatValueFromAny(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func int64ValueFromAny(value any) (int64, bool) {
+	parsed, ok := floatValueFromAny(value)
+	if !ok || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < 0 {
+		return 0, false
+	}
+	return int64(math.Round(parsed)), true
+}
+
+func int64Ptr(value int64) *int64 {
+	result := value
+	return &result
 }

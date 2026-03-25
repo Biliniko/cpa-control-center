@@ -1,35 +1,44 @@
 package backend
 
 type AppSettings struct {
-	BaseURL                 string           `json:"baseUrl"`
-	ManagementToken         string           `json:"managementToken"`
-	Locale                  string           `json:"locale"`
-	DetailedLogs            bool             `json:"detailedLogs"`
-	TargetType              string           `json:"targetType"`
-	Provider                string           `json:"provider"`
-	ScanStrategy            string           `json:"scanStrategy"`
-	ScanBatchSize           int              `json:"scanBatchSize"`
-	SkipKnown401            bool             `json:"skipKnown401"`
-	ProbeWorkers            int              `json:"probeWorkers"`
-	ActionWorkers           int              `json:"actionWorkers"`
-	QuotaWorkers            int              `json:"quotaWorkers"`
-	TimeoutSeconds          int              `json:"timeoutSeconds"`
-	Retries                 int              `json:"retries"`
-	UserAgent               string           `json:"userAgent"`
-	QuotaAction             string           `json:"quotaAction"`
-	QuotaCheckFree          bool             `json:"quotaCheckFree"`
-	QuotaCheckPlus          bool             `json:"quotaCheckPlus"`
-	QuotaCheckPro           bool             `json:"quotaCheckPro"`
-	QuotaCheckTeam          bool             `json:"quotaCheckTeam"`
-	QuotaCheckBusiness      bool             `json:"quotaCheckBusiness"`
-	QuotaCheckEnterprise    bool             `json:"quotaCheckEnterprise"`
-	QuotaFreeMaxAccounts    int              `json:"quotaFreeMaxAccounts"`
-	QuotaAutoRefreshEnabled bool             `json:"quotaAutoRefreshEnabled"`
-	QuotaAutoRefreshCron    string           `json:"quotaAutoRefreshCron"`
-	Delete401               bool             `json:"delete401"`
-	AutoReenable            bool             `json:"autoReenable"`
-	ExportDirectory         string           `json:"exportDirectory"`
-	Schedule                ScheduleSettings `json:"schedule"`
+	BaseURL                 string             `json:"baseUrl"`
+	ManagementToken         string             `json:"managementToken"`
+	Locale                  string             `json:"locale"`
+	DetailedLogs            bool               `json:"detailedLogs"`
+	TargetType              string             `json:"targetType"`
+	Provider                string             `json:"provider"`
+	ScanStrategy            string             `json:"scanStrategy"`
+	ScanBatchSize           int                `json:"scanBatchSize"`
+	SkipKnown401            bool               `json:"skipKnown401"`
+	ProbeWorkers            int                `json:"probeWorkers"`
+	ActionWorkers           int                `json:"actionWorkers"`
+	QuotaWorkers            int                `json:"quotaWorkers"`
+	TimeoutSeconds          int                `json:"timeoutSeconds"`
+	Retries                 int                `json:"retries"`
+	UserAgent               string             `json:"userAgent"`
+	QuotaAction             string             `json:"quotaAction"`
+	QuotaCheckFree          bool               `json:"quotaCheckFree"`
+	QuotaCheckPlus          bool               `json:"quotaCheckPlus"`
+	QuotaCheckPro           bool               `json:"quotaCheckPro"`
+	QuotaCheckTeam          bool               `json:"quotaCheckTeam"`
+	QuotaCheckBusiness      bool               `json:"quotaCheckBusiness"`
+	QuotaCheckEnterprise    bool               `json:"quotaCheckEnterprise"`
+	QuotaFreeMaxAccounts    int                `json:"quotaFreeMaxAccounts"`
+	QuotaAutoRefreshEnabled bool               `json:"quotaAutoRefreshEnabled"`
+	QuotaAutoRefreshCron    string             `json:"quotaAutoRefreshCron"`
+	Delete401               bool               `json:"delete401"`
+	AutoReenable            bool               `json:"autoReenable"`
+	ExportDirectory         string             `json:"exportDirectory"`
+	AuthImport              AuthImportSettings `json:"authImport"`
+	Schedule                ScheduleSettings   `json:"schedule"`
+}
+
+type AuthImportSettings struct {
+	SourceDirectory  string `json:"sourceDirectory"`
+	ArchiveDirectory string `json:"archiveDirectory"`
+	MoveImported     bool   `json:"moveImported"`
+	AutoEnabled      bool   `json:"autoEnabled"`
+	AutoCron         string `json:"autoCron"`
 }
 
 type ScheduleSettings struct {
@@ -133,10 +142,38 @@ type QuotaBucketSummary struct {
 	FailedCount           int      `json:"failedCount"`
 }
 
+type UsageTokenTotals struct {
+	InputTokens     int64 `json:"inputTokens"`
+	OutputTokens    int64 `json:"outputTokens"`
+	ReasoningTokens int64 `json:"reasoningTokens"`
+	CachedTokens    int64 `json:"cachedTokens"`
+	TotalTokens     int64 `json:"totalTokens"`
+}
+
+type ManagementUsageSummary struct {
+	FetchedAt      string           `json:"fetchedAt"`
+	LastRequestAt  string           `json:"lastRequestAt"`
+	TotalRequests  int              `json:"totalRequests"`
+	SuccessCount   int              `json:"successCount"`
+	FailureCount   int              `json:"failureCount"`
+	FailedRequests int              `json:"failedRequests"`
+	TodayRequests  int              `json:"todayRequests"`
+	TodayTokens    int64            `json:"todayTokens"`
+	APIKeyCount    int              `json:"apiKeyCount"`
+	ModelCount     int              `json:"modelCount"`
+	Tokens         UsageTokenTotals `json:"tokens"`
+}
+
 type QuotaBucketDetail struct {
 	Supported        bool     `json:"supported"`
 	RemainingPercent *float64 `json:"remainingPercent"`
 	ResetAt          string   `json:"resetAt"`
+}
+
+type TokenUsageDetail struct {
+	InputTokens  *int64 `json:"inputTokens"`
+	OutputTokens *int64 `json:"outputTokens"`
+	TotalTokens  *int64 `json:"totalTokens"`
 }
 
 type CodexQuotaAccountDetail struct {
@@ -148,6 +185,7 @@ type CodexQuotaAccountDetail struct {
 	Error            string            `json:"error"`
 	FetchedAt        string            `json:"fetchedAt"`
 	EarliestResetAt  string            `json:"earliestResetAt"`
+	TokenUsage       TokenUsageDetail  `json:"tokenUsage"`
 	FiveHour         QuotaBucketDetail `json:"fiveHour"`
 	Weekly           QuotaBucketDetail `json:"weekly"`
 	CodeReviewWeekly QuotaBucketDetail `json:"codeReviewWeekly"`
@@ -186,6 +224,29 @@ type InventorySyncResult struct {
 	TotalAccounts    int    `json:"totalAccounts"`
 	FilteredAccounts int    `json:"filteredAccounts"`
 	SyncedAt         string `json:"syncedAt"`
+}
+
+type AuthImportFileResult struct {
+	Path         string `json:"path"`
+	Name         string `json:"name"`
+	OK           bool   `json:"ok"`
+	Error        string `json:"error"`
+	Archived     bool   `json:"archived"`
+	ArchiveError string `json:"archiveError"`
+}
+
+type AuthImportResult struct {
+	Requested        int                    `json:"requested"`
+	Uploaded         int                    `json:"uploaded"`
+	Failed           int                    `json:"failed"`
+	Skipped          int                    `json:"skipped"`
+	Archived         int                    `json:"archived"`
+	ArchiveFailed    int                    `json:"archiveFailed"`
+	ArchiveDirectory string                 `json:"archiveDirectory"`
+	Synced           bool                   `json:"synced"`
+	SyncError        string                 `json:"syncError"`
+	Inventory        InventorySyncResult    `json:"inventory"`
+	Results          []AuthImportFileResult `json:"results"`
 }
 
 type MaintainOptions struct {

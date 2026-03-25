@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createDefaultSettings, validateSettings } from '@/utils/settings'
+import { createDefaultSettings, listScheduleConflicts, validateSettings } from '@/utils/settings'
 
 describe('validateSettings', () => {
   it('accepts a valid CPA profile', () => {
@@ -13,7 +13,9 @@ describe('validateSettings', () => {
     expect(settings.quotaCheckTeam).toBe(true)
     expect(settings.quotaFreeMaxAccounts).toBe(100)
     expect(settings.quotaAutoRefreshEnabled).toBe(false)
-    expect(settings.quotaAutoRefreshCron).toBe('')
+    expect(settings.quotaAutoRefreshCron).toBe('20 */2 * * *')
+    expect(settings.authImport.autoCron).toBe('10 * * * *')
+    expect(settings.schedule.cron).toBe('0 * * * *')
     settings.baseUrl = 'https://example.com'
     settings.managementToken = 'token'
 
@@ -60,6 +62,24 @@ describe('validateSettings', () => {
     expect(validateSettings(settings)).toMatchObject({
       quotaAutoRefreshCron: expect.any(String),
     })
+  })
+
+  it('detects conflicting enabled schedules', () => {
+    const settings = createDefaultSettings()
+    settings.baseUrl = 'https://example.com'
+    settings.managementToken = 'token'
+    settings.schedule.enabled = true
+    settings.schedule.mode = 'maintain'
+    settings.schedule.cron = '0 * * * *'
+    settings.authImport.autoEnabled = true
+    settings.authImport.sourceDirectory = 'C:\\auth'
+    settings.authImport.autoCron = '0 * * * *'
+    settings.quotaAutoRefreshEnabled = true
+    settings.quotaAutoRefreshCron = '20 */2 * * *'
+
+    const conflicts = listScheduleConflicts(settings, new Date('2026-03-19T00:00:00Z'))
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0].jobs).toEqual(['schedule', 'authImport'])
   })
 
   it('accepts a valid 5-field cron expression', () => {

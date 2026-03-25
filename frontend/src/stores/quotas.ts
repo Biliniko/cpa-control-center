@@ -1,12 +1,17 @@
 import { defineStore } from 'pinia'
-import { GetCodexQuotaSnapshot } from '../../wailsjs/go/main/App'
-import type { CodexQuotaSnapshot, QuotaRecoveryMode, QuotaResultFilter, QuotaSortMode, QuotaViewMode } from '@/types'
+import { GetCodexQuotaSnapshot, GetManagementUsageSummary } from '../../wailsjs/go/main/App'
+import type { CodexQuotaSnapshot, ManagementUsageSummary, QuotaRecoveryMode, QuotaResultFilter, QuotaSortMode, QuotaViewMode } from '@/types'
+import { i18n } from '@/i18n'
 import { toErrorMessage } from '@/utils/errors'
+import { normalizeManagementUsageSummary } from '@/utils/usage'
 
 interface QuotasState {
   snapshot: CodexQuotaSnapshot | null
+  usageSummary: ManagementUsageSummary | null
   loading: boolean
+  usageLoading: boolean
   error: string
+  usageError: string
   hasRequested: boolean
   activeView: QuotaViewMode
   planFilter: string
@@ -23,8 +28,11 @@ interface QuotasState {
 export const useQuotasStore = defineStore('quotasStore', {
   state: (): QuotasState => ({
     snapshot: null,
+    usageSummary: null,
     loading: false,
+    usageLoading: false,
     error: '',
+    usageError: '',
     hasRequested: false,
     activeView: 'overview',
     planFilter: 'all',
@@ -43,6 +51,7 @@ export const useQuotasStore = defineStore('quotasStore', {
     hasData: (state) => (state.snapshot?.plans?.length ?? 0) > 0,
     hasDetailData: (state) => (state.snapshot?.accounts?.length ?? 0) > 0,
     lastFetchedAt: (state) => state.snapshot?.fetchedAt ?? '',
+    usageFetchedAt: (state) => state.usageSummary?.fetchedAt ?? '',
     selectedAccount: (state) => (
       state.snapshot?.accounts?.find((account) => account.name === state.selectedAccountName) ?? null
     ),
@@ -73,6 +82,31 @@ export const useQuotasStore = defineStore('quotasStore', {
         throw new Error(message)
       } finally {
         this.loading = false
+      }
+    },
+    applyUsageSummary(summary?: Record<string, unknown> | null) {
+      const normalized = normalizeManagementUsageSummary(summary)
+      if (!normalized) {
+        throw new Error(i18n.global.t('usage.invalidResponse'))
+      }
+      this.usageSummary = normalized
+      this.usageError = ''
+      return normalized
+    },
+    async refreshUsageSummary(silent = false) {
+      this.usageLoading = true
+      if (!silent) {
+        this.usageError = ''
+      }
+      try {
+        const summary = await GetManagementUsageSummary() as unknown as Record<string, unknown>
+        return this.applyUsageSummary(summary)
+      } catch (error) {
+        const message = toErrorMessage(error)
+        this.usageError = message
+        throw new Error(message)
+      } finally {
+        this.usageLoading = false
       }
     },
     setActiveView(view: QuotaViewMode) {

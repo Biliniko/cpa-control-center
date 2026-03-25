@@ -1,10 +1,10 @@
 import { defineStore } from 'pinia'
 import { EventsOff, EventsOn } from '../../wailsjs/runtime/runtime'
-import { GetSchedulerStatus, GetSettings, SaveSettings, TestAndSaveSettings, TestConnection } from '../../wailsjs/go/main/App'
+import { GetAuthImportSchedulerStatus, GetSchedulerStatus, GetSettings, ImportAuthDirectory, ImportAuthFiles, SaveSettings, TestAndSaveSettings, TestConnection } from '../../wailsjs/go/main/App'
 import { backend as backendModels } from '../../wailsjs/go/models'
 import { i18n, setI18nLocale } from '@/i18n'
-import type { AppSettings, ConnectionResult, SchedulerStatus } from '@/types'
-import { createDefaultScheduleSettings, createDefaultSettings, validateSettings } from '@/utils/settings'
+import type { AppSettings, AuthImportResult, ConnectionResult, SchedulerStatus } from '@/types'
+import { createDefaultAuthImportSettings, createDefaultScheduleSettings, createDefaultSettings, validateSettings } from '@/utils/settings'
 import { toErrorMessage } from '@/utils/errors'
 import { detectPreferredLocale, normalizeLocaleCode } from '@/utils/locale'
 
@@ -12,6 +12,7 @@ interface SettingsState {
   settings: AppSettings
   connection: ConnectionResult | null
   schedulerStatus: SchedulerStatus
+  authImportSchedulerStatus: SchedulerStatus
   loading: boolean
   saving: boolean
   errors: Record<string, string>
@@ -39,6 +40,7 @@ export const useSettingsStore = defineStore('settingsStore', {
     settings: createDefaultSettings(),
     connection: null,
     schedulerStatus: createDefaultSchedulerStatus(),
+    authImportSchedulerStatus: createDefaultSchedulerStatus(),
     loading: false,
     saving: false,
     errors: {},
@@ -58,6 +60,10 @@ export const useSettingsStore = defineStore('settingsStore', {
       this.settings = {
         ...createDefaultSettings(),
         ...result,
+        authImport: {
+          ...createDefaultAuthImportSettings(),
+          ...(result.authImport ?? {}),
+        },
         schedule: {
           ...createDefaultScheduleSettings(),
           ...(result.schedule ?? {}),
@@ -71,11 +77,18 @@ export const useSettingsStore = defineStore('settingsStore', {
         ...(status ?? {}),
       }
     },
+    applyAuthImportSchedulerStatus(status?: Partial<SchedulerStatus> | null) {
+      this.authImportSchedulerStatus = {
+        ...createDefaultSchedulerStatus(),
+        ...(status ?? {}),
+      }
+    },
     initSchedulerBridge() {
       if (this.schedulerBridgeReady) {
         return
       }
       EventsOn('scheduler:status', (status: SchedulerStatus) => this.applySchedulerStatus(status))
+      EventsOn('auth-import:scheduler:status', (status: SchedulerStatus) => this.applyAuthImportSchedulerStatus(status))
       this.schedulerBridgeReady = true
     },
     destroySchedulerBridge() {
@@ -83,6 +96,7 @@ export const useSettingsStore = defineStore('settingsStore', {
         return
       }
       EventsOff('scheduler:status')
+      EventsOff('auth-import:scheduler:status')
       this.schedulerBridgeReady = false
     },
     applyLocale(locale?: string) {
@@ -94,10 +108,16 @@ export const useSettingsStore = defineStore('settingsStore', {
       this.applySchedulerStatus(status as unknown as Partial<SchedulerStatus>)
       return this.schedulerStatus
     },
+    async loadAuthImportSchedulerStatus() {
+      const status = await GetAuthImportSchedulerStatus()
+      this.applyAuthImportSchedulerStatus(status as unknown as Partial<SchedulerStatus>)
+      return this.authImportSchedulerStatus
+    },
     async persistSettings() {
       const saved = await SaveSettings(new backendModels.AppSettings(this.settings))
       this.mergeSettings(saved as unknown as Partial<AppSettings>)
       await this.loadSchedulerStatus()
+      await this.loadAuthImportSchedulerStatus()
       return this.settings
     },
     async loadSettings() {
@@ -106,6 +126,7 @@ export const useSettingsStore = defineStore('settingsStore', {
         const result = await GetSettings()
         this.mergeSettings(result as unknown as Partial<AppSettings>)
         await this.loadSchedulerStatus()
+        await this.loadAuthImportSchedulerStatus()
       } finally {
         this.loading = false
       }
@@ -156,6 +177,14 @@ export const useSettingsStore = defineStore('settingsStore', {
       } finally {
         this.saving = false
       }
+    },
+    async importAuthFiles() {
+      return await ImportAuthFiles() as unknown as AuthImportResult
+    },
+    async importAuthDirectory() {
+      const result = await ImportAuthDirectory() as unknown as AuthImportResult
+      await this.loadSettings()
+      return result
     },
   },
 })

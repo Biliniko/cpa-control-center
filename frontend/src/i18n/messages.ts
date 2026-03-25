@@ -62,9 +62,12 @@ export const messages = {
       phases: {
         idle: 'Idle',
         queued: 'Queued',
+        prepare: 'Prepare',
         fetch: 'Fetch',
         query: 'Query',
         probe: 'Probe',
+        upload: 'Upload',
+        archive: 'Archive',
         persist: 'Persist',
         delete401: 'Delete 401',
         quota: 'Quota Action',
@@ -89,6 +92,7 @@ export const messages = {
       maintainTask: 'Maintain Task',
       inventoryTask: 'Inventory Sync',
       quotaTask: 'Quota Refresh',
+      importTask: 'Auth Import',
       taskStream: 'Task Stream',
       runtimeEvents: 'Runtime events',
       kind: {
@@ -96,6 +100,7 @@ export const messages = {
         maintain: 'Maintain',
         inventory: 'Inventory',
         quota: 'Quota Refresh',
+        import: 'Auth Import',
       },
       level: {
         info: 'Info',
@@ -380,6 +385,24 @@ export const messages = {
       quotaPlanEnterprise: 'Enterprise',
       exportDirectory: 'Export Directory',
       userAgent: 'User Agent',
+      importSection: 'Auth Import',
+      importTitle: 'Import local auth files',
+      importHint: 'Uses the currently saved CPA connection. Save your latest Base URL and Management Token before importing files or directories.',
+      importSourceDirectory: 'Import Directory',
+      importArchiveDirectory: 'Archive Directory',
+      importMoveImported: 'Move imported files to archive',
+      importAutoEnabled: 'Enable automatic import',
+      importAutoCron: 'Automatic import cron',
+      importDirectoryRememberHint: 'Clicking Import Directory also remembers that folder for automatic import. The app must stay open for the scheduler to run.',
+      importArchiveHint: 'Successfully uploaded files can be moved into the archive directory so they are not imported again.',
+      importArchiveSuccess: 'Imported {uploaded} auth file(s), synced inventory, and archived {archived} file(s).',
+      importArchiveWarning: 'Imported {uploaded}/{requested} auth file(s), but {archiveFailed} file(s) could not be moved to the archive directory.',
+      importFiles: 'Import Files',
+      importDirectory: 'Import Directory',
+      importSuccess: 'Imported {uploaded} auth file(s) and synced inventory.',
+      importPartial: 'Imported {uploaded}/{requested} auth file(s). Failed: {failed}, skipped: {skipped}.',
+      importPartialWithSyncError: 'Imported {uploaded}/{requested} auth file(s), but inventory sync failed: {error}',
+      importFailure: 'No auth files were imported. Failed: {failed}, skipped: {skipped}.',
       delete401: 'Delete 401 in maintain flow',
       autoReenable: 'Auto re-enable recovered accounts',
       detailedLogs: 'Detailed task logs',
@@ -399,6 +422,11 @@ export const messages = {
       scheduleLastFinished: 'Last finished',
       scheduleLastResult: 'Last result',
       scheduleStatusMessage: 'Status message',
+      importScheduleNextRun: 'Next import',
+      importScheduleLastStarted: 'Last import started',
+      importScheduleLastFinished: 'Last import finished',
+      importScheduleLastResult: 'Last import result',
+      importScheduleStatusMessage: 'Import status message',
       info: {
         scanStrategy: 'Full scan probes every filtered account in one run. Incremental scan probes only one batch each run to spread load across large pools.',
         scanBatchSize: 'Only used in incremental mode. This sets how many filtered accounts are probed in each scan run.',
@@ -410,12 +438,17 @@ export const messages = {
         quotaAction: 'What maintenance should do with quota-limited accounts after scanning. Disable is safer; delete is more aggressive.',
         quotaFreeMaxAccounts: 'Limits how many free accounts are queried for quotas. Use -1 to remove the cap completely.',
         quotaPlanToggles: 'Only enabled plans are queried and shown on the Codex quota page. Free is off by default to avoid wasting calls on low-value accounts.',
+        importSourceDirectory: 'This directory is scanned recursively for .json auth files. The selected Import Directory action also remembers it for scheduled imports.',
+        importArchiveDirectory: 'Uploaded files can be moved here after a successful import. Using a separate archive prevents the same auth files from being imported again.',
+        importMoveImported: 'Only successfully uploaded auth files are moved. Failed or invalid files stay in the source directory for troubleshooting.',
+        importAutoCron: 'The app checks the import directory on this 5-field cron schedule while the desktop app is running. Example: 0 * * * * for every hour.',
         scheduleMode: 'Scan runs a scheduled health check only. Maintain first scans, then executes maintenance actions using the current settings.',
         scheduleCron: 'Uses standard 5-field cron in your local timezone: minute hour day month weekday. Example: 0 */6 * * *.',
       },
       scheduleStatus: {
         idle: 'Idle',
         running: 'Running',
+        queued: 'Queued',
         success: 'Success',
         failed: 'Failed',
         cancelled: 'Cancelled',
@@ -451,6 +484,9 @@ export const messages = {
       scanStrategyInvalid: 'Scan strategy must be full or incremental.',
       scanBatchSizeMin: 'Incremental batch size must be at least 1.',
       quotaActionInvalid: 'Quota action must be disable or delete.',
+      authImportSourceDirectoryRequired: 'Import directory is required when automatic import is enabled.',
+      authImportAutoCronRequired: 'Automatic import cron is required when automatic import is enabled.',
+      authImportAutoCronInvalid: 'Automatic import cron must be a valid 5-field cron expression.',
       scheduleModeInvalid: 'Scheduled action must be scan or maintain.',
       scheduleCronRequired: 'Cron expression is required when the scheduler is enabled.',
       scheduleCronInvalid: 'Cron expression must be a valid 5-field cron expression.',
@@ -837,6 +873,15 @@ export const messages = {
       quotaPlanEnterprise: 'Enterprise',
       exportDirectory: '导出目录',
       userAgent: 'User Agent',
+      importSection: '认证导入',
+      importTitle: '导入本地 auth 文件',
+      importHint: '导入会使用当前已保存的 CPA 连接。开始前请先保存最新的 Base URL 和管理令牌。',
+      importFiles: '导入文件',
+      importDirectory: '导入目录',
+      importSuccess: '已导入 {uploaded} 个 auth 文件，并同步 inventory。',
+      importPartial: '已导入 {uploaded}/{requested} 个 auth 文件。失败 {failed} 个，跳过 {skipped} 个。',
+      importPartialWithSyncError: '已导入 {uploaded}/{requested} 个 auth 文件，但 inventory 同步失败：{error}',
+      importFailure: '没有成功导入任何 auth 文件。失败 {failed} 个，跳过 {skipped} 个。',
       skipKnown401: '扫描时跳过已知 401',
       delete401: '在维护流程中删除 401',
       autoReenable: '自动恢复已恢复账号',
@@ -860,6 +905,7 @@ export const messages = {
       scheduleStatus: {
         idle: '空闲',
         running: '执行中',
+        queued: '排队中',
         success: '成功',
         failed: '失败',
         cancelled: '已取消',
@@ -908,3 +954,148 @@ export const messages = {
     },
   },
 } as const
+
+Object.assign((messages as any)['zh-CN'].tasks.phases, {
+  prepare: '准备',
+  upload: '上传',
+  archive: '归档',
+})
+
+Object.assign((messages as any)['zh-CN'].logs, {
+  importTask: '认证导入',
+})
+
+Object.assign((messages as any)['zh-CN'].logs.kind, {
+  import: '认证导入',
+})
+
+Object.assign((messages as any)['zh-CN'].settings, {
+  importSourceDirectory: '导入目录',
+  importArchiveDirectory: '归档目录',
+  importMoveImported: '导入成功后移动到归档目录',
+  importAutoEnabled: '启用自动导入',
+  importAutoCron: '自动导入 Cron',
+  importDirectoryRememberHint: '点击“导入目录”时也会记住该目录，供自动导入使用。定时导入只会在桌面程序保持运行时生效。',
+  importArchiveHint: '成功上传的文件可以移动到归档目录，避免下次再被重复导入。',
+  importArchiveSuccess: '已导入 {uploaded} 个 auth 文件，同步 inventory，并归档了 {archived} 个文件。',
+  importArchiveWarning: '已导入 {uploaded}/{requested} 个 auth 文件，但有 {archiveFailed} 个文件移动到归档目录失败。',
+  importScheduleNextRun: '下一次自动导入',
+  importScheduleLastStarted: '上一次导入开始',
+  importScheduleLastFinished: '上一次导入完成',
+  importScheduleLastResult: '上一次导入结果',
+  importScheduleStatusMessage: '导入状态消息',
+})
+
+Object.assign((messages as any)['zh-CN'].settings.info, {
+  importSourceDirectory: '应用会递归扫描这个目录下的 .json auth 文件。点击“导入目录”时选择的目录也会自动记到这里，供定时导入使用。',
+  importArchiveDirectory: '成功上传后的文件会移动到这里。单独的归档目录可以避免同一批 auth 文件被重复导入。',
+  importMoveImported: '只有成功上传的 auth 文件才会被移动。失败或无效文件会继续留在原目录里，方便排查。',
+  importAutoCron: '桌面程序运行期间，会按这个 5 段 Cron 表达式定时检查导入目录。示例：0 * * * * 表示每小时一次。',
+})
+
+Object.assign((messages as any)['zh-CN'].validation, {
+  authImportSourceDirectoryRequired: '启用自动导入后必须填写导入目录。',
+  authImportAutoCronRequired: '启用自动导入后必须填写 Cron 表达式。',
+  authImportAutoCronInvalid: '自动导入 Cron 必须是合法的 5 段表达式。',
+})
+
+Object.assign((messages as any)['en-US'].settings, {
+  scheduleConflictTitle: 'Potential schedule conflicts',
+  scheduleConflictWarning: '{first} and {second} are both scheduled for {time}.',
+  scheduleRecommendedOffsets: 'Recommended stagger: scheduled scan or maintenance at `0 * * * *`, automatic auth import at `10 * * * *`, and quota auto refresh at `20 */2 * * *`.',
+  scheduleJobScan: 'Scheduled scan',
+  scheduleJobMaintain: 'Scheduled maintenance',
+  scheduleJobImport: 'Automatic auth import',
+  scheduleJobQuota: 'Quota auto refresh',
+})
+
+Object.assign((messages as any)['zh-CN'].settings, {
+  scheduleConflictTitle: '检测到可能的定时冲突',
+  scheduleConflictWarning: '{first} 和 {second} 都会在 {time} 这一分钟触发。',
+  scheduleRecommendedOffsets: '推荐错峰：扫描或维护用 `0 * * * *`，自动导入用 `10 * * * *`，额度自动刷新用 `20 */2 * * *`。',
+  scheduleJobScan: '定时扫描',
+  scheduleJobMaintain: '定时维护',
+  scheduleJobImport: '自动认证导入',
+  scheduleJobQuota: '额度自动刷新',
+})
+Object.assign((messages as any)['en-US'].quotas, {
+  tokens: {
+    title: 'Token Consumption',
+    total: 'Total tokens',
+    input: 'Input tokens',
+    output: 'Output tokens',
+  },
+})
+
+Object.assign((messages as any)['zh-CN'].quotas, {
+  tokens: {
+    title: 'Token \u6d88\u8017',
+    total: '\u603b Token',
+    input: '\u8f93\u5165 Token',
+    output: '\u8f93\u51fa Token',
+  },
+})
+
+Object.assign((messages as any)['en-US'], {
+  usage: {
+    kicker: 'CLIProxy Usage',
+    title: 'Total consumption',
+    lead: 'Reads the aggregated usage statistics from CLIProxy so you can watch overall token burn without opening the proxy panel.',
+    refresh: 'Refresh usage',
+    loading: 'Loading the latest usage summary...',
+    empty: 'No usage data is available yet. Click refresh to try again.',
+    unconfigured: 'Save the Base URL and Management Token first to load total consumption.',
+    loadFailedTitle: 'Usage summary failed',
+    invalidResponse: 'The usage summary response was empty.',
+    autoRefreshHint: 'Auto refreshes every 15 seconds while this page is open.',
+    lastUpdated: 'Usage updated: {value}',
+    staleWarningTitle: 'Latest refresh failed',
+    staleWarningBody: 'Showing the last successful usage snapshot below.',
+    cards: {
+      totalTokens: 'Total tokens',
+      todayTokens: 'Today tokens',
+      inputTokens: 'Input tokens',
+      outputTokens: 'Output tokens',
+      totalRequests: 'Total requests',
+      successRate: 'Success rate',
+    },
+    meta: {
+      lastRequest: 'Last request',
+      apiKeys: 'API keys',
+      models: 'Models',
+      failedRequests: 'Failed requests',
+    },
+  },
+})
+
+Object.assign((messages as any)['zh-CN'], {
+  usage: {
+    kicker: 'CLIProxy \u7528\u91cf',
+    title: '\u603b\u6d88\u8017',
+    lead: '\u76f4\u63a5\u8bfb\u53d6 CLIProxy \u805a\u5408\u540e\u7684\u7528\u91cf\u7edf\u8ba1\uff0c\u4e0d\u7528\u6253\u5f00\u4ee3\u7406\u9762\u677f\u4e5f\u80fd\u770b\u603b\u4f53 Token \u6d88\u8017\u3002',
+    refresh: '\u5237\u65b0\u603b\u6d88\u8017',
+    loading: '\u6b63\u5728\u52a0\u8f7d\u6700\u65b0\u603b\u6d88\u8017...',
+    empty: '\u6682\u65f6\u8fd8\u6ca1\u6709\u53ef\u663e\u793a\u7684\u603b\u6d88\u8017\uff0c\u53ef\u4ee5\u70b9\u4e00\u4e0b\u5237\u65b0\u518d\u8bd5\u3002',
+    unconfigured: '\u8bf7\u5148\u4fdd\u5b58 Base URL \u548c\u7ba1\u7406\u5bc6\u94a5\uff0c\u7136\u540e\u518d\u67e5\u770b\u603b\u6d88\u8017\u3002',
+    loadFailedTitle: '\u603b\u6d88\u8017\u52a0\u8f7d\u5931\u8d25',
+    invalidResponse: '\u603b\u6d88\u8017\u8fd4\u56de\u4e3a\u7a7a\u3002',
+    autoRefreshHint: '\u5f53\u524d\u9875\u4fdd\u6301\u6253\u5f00\u65f6\uff0c\u6bcf 15 \u79d2\u81ea\u52a8\u5237\u65b0\u4e00\u6b21\u3002',
+    lastUpdated: '\u603b\u6d88\u8017\u66f4\u65b0\u65f6\u95f4\uff1a{value}',
+    staleWarningTitle: '\u6700\u65b0\u5237\u65b0\u5931\u8d25',
+    staleWarningBody: '\u4e0b\u9762\u6682\u65f6\u663e\u793a\u4e0a\u4e00\u6b21\u6210\u529f\u62c9\u53d6\u7684\u603b\u6d88\u8017\u3002',
+    cards: {
+      totalTokens: '\u603b Token',
+      todayTokens: '\u4eca\u65e5 Token',
+      inputTokens: '\u8f93\u5165 Token',
+      outputTokens: '\u8f93\u51fa Token',
+      totalRequests: '\u603b\u8bf7\u6c42\u6570',
+      successRate: '\u6210\u529f\u7387',
+    },
+    meta: {
+      lastRequest: '\u6700\u8fd1\u8bf7\u6c42',
+      apiKeys: 'API Keys',
+      models: '\u6a21\u578b\u6570',
+      failedRequests: '\u5931\u8d25\u8bf7\u6c42',
+    },
+  },
+})

@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -79,6 +80,45 @@ func TestClientFetchProbeAndActions(t *testing.T) {
 	deleted := client.DeleteAccount(context.Background(), settings, record.Name)
 	if !deleted.OK {
 		t.Fatalf("DeleteAccount failed: %+v", deleted)
+	}
+}
+
+func TestClientUploadAuthFile(t *testing.T) {
+	t.Parallel()
+
+	var uploadedName string
+	var uploadedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v0/management/auth-files" {
+			http.NotFound(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		uploadedName = r.URL.Query().Get("name")
+		uploadedBody = string(body)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TimeoutSeconds:  5,
+	}
+
+	if err := client.UploadAuthFile(context.Background(), settings, "codex/import.json", []byte(`{"type":"codex"}`)); err != nil {
+		t.Fatalf("UploadAuthFile: %v", err)
+	}
+	if uploadedName != "codex/import.json" {
+		t.Fatalf("unexpected uploaded name: %s", uploadedName)
+	}
+	if uploadedBody != `{"type":"codex"}` {
+		t.Fatalf("unexpected uploaded body: %s", uploadedBody)
 	}
 }
 

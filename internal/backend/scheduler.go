@@ -158,6 +158,14 @@ func (s *schedulerRuntime) execute(version int64, mode string, cronExpr string) 
 	s.finish(version, resultStatus, resultMessage)
 }
 
+func (s *schedulerRuntime) triggerQueued(mode string, cronExpr string) {
+	s.mu.Lock()
+	version := s.version
+	s.mu.Unlock()
+
+	s.execute(version, mode, cronExpr)
+}
+
 func (s *schedulerRuntime) markRunning(version int64, message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -221,6 +229,10 @@ func validateScheduleSettings(locale string, schedule ScheduleSettings) error {
 	if strings.TrimSpace(schedule.Cron) == "" {
 		return errors.New(msg(locale, "error.schedule_cron_required"))
 	}
+	return validateCronExpression(locale, schedule.Cron)
+}
+
+func validateCronExpression(locale string, expression string) error {
 	parser := cron.NewParser(
 		cron.Minute |
 			cron.Hour |
@@ -228,7 +240,7 @@ func validateScheduleSettings(locale string, schedule ScheduleSettings) error {
 			cron.Month |
 			cron.Dow,
 	)
-	if _, err := parser.Parse(strings.TrimSpace(schedule.Cron)); err != nil {
+	if _, err := parser.Parse(strings.TrimSpace(expression)); err != nil {
 		return fmt.Errorf("%s: %w", msg(locale, "error.schedule_invalid_cron"), err)
 	}
 	return nil
@@ -249,9 +261,14 @@ func (b *Backend) executeScheduledTask(mode string, cronExpr string) (string, st
 	if err != nil {
 		var runningErr taskRunningError
 		if errors.As(err, &runningErr) {
-			message := msg(settings.Locale, "task.schedule.skipped_active", taskName(settings.Locale, mode), taskName(settings.Locale, runningErr.activeKind))
+			if mode == "import" {
+				b.queueScheduledAuthImport(cronExpr)
+			} else {
+				b.queueScheduledTask(mode, cronExpr)
+			}
+			message := msg(settings.Locale, "task.schedule.queued_active", taskName(settings.Locale, mode), taskName(settings.Locale, runningErr.activeKind))
 			b.emitLog(mode, "warning", message)
-			return "skipped", message
+			return "queued", message
 		}
 		message := msg(settings.Locale, "task.schedule.failed", taskName(settings.Locale, mode), err)
 		b.emitLog(mode, "error", message)
@@ -268,6 +285,10 @@ func (b *Backend) executeScheduledTask(mode string, cronExpr string) (string, st
 		result, err := b.runMaintain(ctx, settings)
 		runErr = err
 		resultMessage = result.Scan.Message
+	case "import":
+		result, err := b.runScheduledAuthImport(ctx, settings)
+		runErr = err
+		resultMessage = authImportSummaryMessage(settings.Locale, result)
 	default:
 		summary, _, _, err := b.runScan(ctx, "scan", settings)
 		runErr = err

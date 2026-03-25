@@ -99,12 +99,60 @@ func (a *App) SyncInventory() (backend.InventorySyncResult, error) {
 	return service.SyncInventory()
 }
 
+func (a *App) ImportAuthFiles() (backend.AuthImportResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.AuthImportResult{}, err
+	}
+	paths, err := runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select auth JSON files",
+		Filters: []runtime.FileFilter{
+			{
+				DisplayName: "JSON Files (*.json)",
+				Pattern:     "*.json",
+			},
+		},
+	})
+	if err != nil {
+		return backend.AuthImportResult{}, err
+	}
+	if len(paths) == 0 {
+		return backend.AuthImportResult{}, nil
+	}
+	return service.ImportAuthFiles(paths)
+}
+
+func (a *App) ImportAuthDirectory() (backend.AuthImportResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.AuthImportResult{}, err
+	}
+	directory, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select auth directory",
+	})
+	if err != nil {
+		return backend.AuthImportResult{}, err
+	}
+	if directory == "" {
+		return backend.AuthImportResult{}, nil
+	}
+	return service.ImportAuthDirectory(directory)
+}
+
 func (a *App) GetSchedulerStatus() (backend.SchedulerStatus, error) {
 	service, err := a.ensureBackend()
 	if err != nil {
 		return backend.SchedulerStatus{}, err
 	}
 	return service.GetSchedulerStatus(), nil
+}
+
+func (a *App) GetAuthImportSchedulerStatus() (backend.SchedulerStatus, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.SchedulerStatus{}, err
+	}
+	return service.GetAuthImportSchedulerStatus(), nil
 }
 
 func (a *App) GetDashboardSummary() (backend.DashboardSummary, error) {
@@ -129,6 +177,14 @@ func (a *App) GetCodexQuotaSnapshot() (backend.CodexQuotaSnapshot, error) {
 		return backend.CodexQuotaSnapshot{}, err
 	}
 	return service.GetCodexQuotaSnapshot()
+}
+
+func (a *App) GetManagementUsageSummary() (backend.ManagementUsageSummary, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.ManagementUsageSummary{}, err
+	}
+	return service.GetManagementUsageSummary()
 }
 
 func (a *App) ListAccounts(filter backend.AccountFilter) ([]backend.AccountRecord, error) {

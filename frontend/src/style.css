@@ -2008,6 +2008,135 @@ select {
   width: 100%;
 }
 
+.usage-summary-panel {
+  display: grid;
+  gap: 1rem;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(24, 95, 74, 0.1), transparent 26%),
+    linear-gradient(180deg, rgba(253, 251, 246, 0.98), rgba(245, 239, 229, 0.98));
+}
+
+.usage-summary-panel__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.usage-summary-panel__head > div {
+  min-width: 0;
+}
+
+.usage-summary-panel__lead {
+  max-width: 58ch;
+}
+
+.usage-summary-panel__actions {
+  display: grid;
+  justify-items: end;
+  gap: 0.5rem;
+  min-width: 0;
+  text-align: right;
+}
+
+.usage-summary-panel__hint {
+  font-weight: 700;
+}
+
+.usage-summary-panel__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem 0.8rem;
+}
+
+.usage-summary-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.usage-summary-panel__card {
+  grid-column: span 2;
+  display: grid;
+  gap: 0.32rem;
+  min-height: 104px;
+  padding: 0.95rem 1rem;
+  border-radius: 24px;
+  border: 1px solid rgba(24, 95, 74, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(243, 238, 228, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.54),
+    0 14px 24px rgba(32, 52, 45, 0.06);
+}
+
+.usage-summary-panel__card--hero {
+  grid-column: span 4;
+  background:
+    radial-gradient(circle at top right, rgba(24, 95, 74, 0.16), transparent 36%),
+    linear-gradient(180deg, rgba(237, 246, 240, 0.98), rgba(225, 237, 229, 0.98));
+  border-color: rgba(24, 95, 74, 0.18);
+}
+
+.usage-summary-panel__card-label {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(88, 78, 64, 0.74);
+}
+
+.usage-summary-panel__card-value {
+  font-size: clamp(1.1rem, 1.5vw, 1.35rem);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+.usage-summary-panel__card--hero .usage-summary-panel__card-value {
+  font-size: clamp(1.85rem, 3vw, 2.5rem);
+  color: #154f3f;
+}
+
+.usage-summary-panel__meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.usage-summary-panel__meta-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 38px;
+  padding: 0.42rem 0.82rem;
+  border-radius: 999px;
+  border: 1px solid rgba(24, 95, 74, 0.08);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink-soft);
+}
+
+.usage-summary-panel__meta-pill strong {
+  color: var(--ink);
+}
+
+.usage-summary-panel__status {
+  margin: 0;
+  padding: 0.15rem 0.1rem;
+}
+
+.usage-summary-panel__empty {
+  min-height: 110px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
 .quota-callout {
   display: flex;
   flex-direction: column;
@@ -2993,6 +3122,63 @@ select {
   color: rgba(255, 196, 180, 0.88);
 }
 
+.quota-detail-modal__tokens {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem 0.95rem;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 10px 18px rgba(0, 0, 0, 0.1);
+}
+
+.quota-detail-modal__section-kicker {
+  margin: 0;
+}
+
+.quota-detail-modal__tokens-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 0.55rem;
+}
+
+.quota-detail-modal__token-card {
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.72rem 0.78rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025));
+}
+
+.quota-detail-modal__token-card--unknown {
+  opacity: 0.76;
+}
+
+.quota-detail-modal__token-label {
+  color: rgba(222, 228, 232, 0.84);
+  line-height: 1.35;
+}
+
+.quota-detail-modal__token-value {
+  font-size: 1.08rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: rgba(247, 245, 239, 0.98);
+}
+
+.quota-detail-modal--success .quota-detail-modal__token-value {
+  color: rgba(231, 249, 241, 0.98);
+}
+
+.quota-detail-modal--failed .quota-detail-modal__token-value {
+  color: rgba(251, 236, 232, 0.98);
+}
+
 .quota-detail-modal__buckets {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
@@ -3123,12 +3309,14 @@ select {
 .quota-detail-enter-active .quota-detail-modal__meta,
 .quota-detail-enter-active .quota-detail-modal__headline,
 .quota-detail-enter-active .quota-detail-modal__error,
+.quota-detail-enter-active .quota-detail-modal__tokens,
 .quota-detail-enter-active .quota-detail-modal__bucket,
 .quota-detail-enter-active .quota-detail-modal__fetched,
 .quota-detail-leave-active .quota-detail-modal__head,
 .quota-detail-leave-active .quota-detail-modal__meta,
 .quota-detail-leave-active .quota-detail-modal__headline,
 .quota-detail-leave-active .quota-detail-modal__error,
+.quota-detail-leave-active .quota-detail-modal__tokens,
 .quota-detail-leave-active .quota-detail-modal__bucket,
 .quota-detail-leave-active .quota-detail-modal__fetched {
   will-change: opacity, transform;
@@ -3147,6 +3335,10 @@ select {
 
 .quota-detail-enter-active .quota-detail-modal__headline {
   transition-delay: 72ms;
+}
+
+.quota-detail-enter-active .quota-detail-modal__tokens {
+  transition-delay: 102ms;
 }
 
 .quota-detail-enter-active .quota-detail-modal__error,
@@ -3197,6 +3389,12 @@ select {
 
 .quota-detail-enter-from .quota-detail-modal__headline,
 .quota-detail-leave-to .quota-detail-modal__headline {
+  opacity: 0;
+  transform: translate3d(0, 18px, 0);
+}
+
+.quota-detail-enter-from .quota-detail-modal__tokens,
+.quota-detail-leave-to .quota-detail-modal__tokens {
   opacity: 0;
   transform: translate3d(0, 18px, 0);
 }
@@ -3446,6 +3644,27 @@ select {
 
 .app-shell--compact .quota-hero__actions .el-button {
   align-self: flex-start;
+}
+
+.app-shell--compact .usage-summary-panel__head,
+.app-shell--compact .usage-summary-panel__actions,
+.app-shell--compact .usage-summary-panel__controls {
+  display: grid;
+  justify-items: start;
+  text-align: left;
+}
+
+.app-shell--compact .usage-summary-panel__grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.app-shell--compact .usage-summary-panel__card,
+.app-shell--compact .usage-summary-panel__card--hero {
+  grid-column: span 1;
+}
+
+.app-shell--compact .usage-summary-panel__card--hero .usage-summary-panel__card-value {
+  font-size: clamp(1.55rem, 8vw, 2rem);
 }
 
 .app-shell--compact .quota-grid {

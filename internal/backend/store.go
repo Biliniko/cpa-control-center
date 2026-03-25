@@ -226,6 +226,11 @@ func (s *Store) SaveSettings(input AppSettings) (AppSettings, error) {
 	if err := ensureDir(settings.ExportDirectory); err != nil {
 		return settings, err
 	}
+	if settings.AuthImport.MoveImported {
+		if err := ensureDir(settings.AuthImport.ArchiveDirectory); err != nil {
+			return settings, err
+		}
+	}
 
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

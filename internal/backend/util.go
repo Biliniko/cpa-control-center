@@ -22,6 +22,10 @@ const (
 	defaultQuotaAction          = "disable"
 	defaultQuotaFreeMaxAccounts = 100
 	defaultScheduleMode         = "scan"
+	defaultScheduleCron         = "0 * * * *"
+	defaultAuthImportAutoCron   = "10 * * * *"
+	defaultQuotaAutoRefreshCron = "20 */2 * * *"
+	defaultAuthImportArchiveDir = "CPA Imported Auth"
 	defaultUserAgent            = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
 	defaultHistoryLimit         = 30
 	whamUsageURL                = "https://chatgpt.com/backend-api/wham/usage"
@@ -29,35 +33,42 @@ const (
 
 func defaultSettings(exportDir string) AppSettings {
 	return AppSettings{
-		Locale:               localeOrDefault(""),
-		DetailedLogs:         false,
-		TargetType:           defaultTargetType,
-		ScanStrategy:         defaultScanStrategy,
-		ScanBatchSize:        defaultScanBatchSize,
-		SkipKnown401:         true,
-		ProbeWorkers:         defaultProbeWorkers,
-		ActionWorkers:        defaultActionWorkers,
-		QuotaWorkers:         defaultQuotaWorkers,
-		TimeoutSeconds:       defaultTimeout,
-		Retries:              defaultRetries,
-		UserAgent:            defaultUserAgent,
-		QuotaAction:          defaultQuotaAction,
-		QuotaCheckFree:       false,
-		QuotaCheckPlus:       true,
-		QuotaCheckPro:        true,
-		QuotaCheckTeam:       true,
-		QuotaCheckBusiness:   true,
-		QuotaCheckEnterprise: true,
-		QuotaFreeMaxAccounts: defaultQuotaFreeMaxAccounts,
+		Locale:                  localeOrDefault(""),
+		DetailedLogs:            false,
+		TargetType:              defaultTargetType,
+		ScanStrategy:            defaultScanStrategy,
+		ScanBatchSize:           defaultScanBatchSize,
+		SkipKnown401:            true,
+		ProbeWorkers:            defaultProbeWorkers,
+		ActionWorkers:           defaultActionWorkers,
+		QuotaWorkers:            defaultQuotaWorkers,
+		TimeoutSeconds:          defaultTimeout,
+		Retries:                 defaultRetries,
+		UserAgent:               defaultUserAgent,
+		QuotaAction:             defaultQuotaAction,
+		QuotaCheckFree:          false,
+		QuotaCheckPlus:          true,
+		QuotaCheckPro:           true,
+		QuotaCheckTeam:          true,
+		QuotaCheckBusiness:      true,
+		QuotaCheckEnterprise:    true,
+		QuotaFreeMaxAccounts:    defaultQuotaFreeMaxAccounts,
 		QuotaAutoRefreshEnabled: false,
-		QuotaAutoRefreshCron:    "",
-		Delete401:            true,
-		AutoReenable:         true,
-		ExportDirectory:      exportDir,
+		QuotaAutoRefreshCron:    defaultQuotaAutoRefreshCron,
+		Delete401:               true,
+		AutoReenable:            true,
+		ExportDirectory:         exportDir,
+		AuthImport: AuthImportSettings{
+			SourceDirectory:  "",
+			ArchiveDirectory: defaultAuthImportArchiveDirectory(),
+			MoveImported:     false,
+			AutoEnabled:      false,
+			AutoCron:         defaultAuthImportAutoCron,
+		},
 		Schedule: ScheduleSettings{
 			Enabled: false,
 			Mode:    defaultScheduleMode,
-			Cron:    "",
+			Cron:    defaultScheduleCron,
 		},
 	}
 }
@@ -125,6 +136,17 @@ func normalizeSettings(input AppSettings, exportDir string) AppSettings {
 	if trimmed := strings.TrimSpace(input.ExportDirectory); trimmed != "" {
 		settings.ExportDirectory = trimmed
 	}
+	if trimmed := strings.TrimSpace(input.AuthImport.SourceDirectory); trimmed != "" {
+		settings.AuthImport.SourceDirectory = filepath.Clean(trimmed)
+	}
+	if trimmed := strings.TrimSpace(input.AuthImport.ArchiveDirectory); trimmed != "" {
+		settings.AuthImport.ArchiveDirectory = filepath.Clean(trimmed)
+	}
+	settings.AuthImport.MoveImported = input.AuthImport.MoveImported
+	settings.AuthImport.AutoEnabled = input.AuthImport.AutoEnabled
+	if trimmed := strings.TrimSpace(input.AuthImport.AutoCron); trimmed != "" {
+		settings.AuthImport.AutoCron = trimmed
+	}
 	settings.Schedule.Enabled = input.Schedule.Enabled
 	if normalized := normalizeScheduleMode(input.Schedule.Mode); normalized != "" {
 		settings.Schedule.Mode = normalized
@@ -136,6 +158,14 @@ func normalizeSettings(input AppSettings, exportDir string) AppSettings {
 	}
 
 	return settings
+}
+
+func defaultAuthImportArchiveDirectory() string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return filepath.Join(os.TempDir(), defaultAuthImportArchiveDir)
+	}
+	return filepath.Join(homeDir, "Desktop", defaultAuthImportArchiveDir)
 }
 
 func normalizeScanStrategy(strategy string) string {
