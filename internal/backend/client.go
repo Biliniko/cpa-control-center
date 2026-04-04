@@ -252,11 +252,17 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 		return result
 	}
 
+	applyUsageLimitDetails(&result.Record, parsedBody)
+
 	if statusCode == http.StatusUnauthorized {
-		result.Record.ProbeErrorKind = ""
-		result.Record.ProbeErrorText = ""
+		if result.Record.ProbeErrorKind == "usage_limit_reached" {
+			result.UsageError = errors.New(result.Record.ProbeErrorText)
+		} else {
+			result.Record.ProbeErrorKind = ""
+			result.Record.ProbeErrorText = ""
+			result.UsageError = errors.New(msg(settings.Locale, "error.unexpected_upstream_status", statusCode))
+		}
 		result.Record = classifyAccountState(result.Record)
-		result.UsageError = errors.New(msg(settings.Locale, "error.unexpected_upstream_status", statusCode))
 		return result
 	}
 
@@ -543,8 +549,9 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func classifyAccountState(record AccountRecord) AccountRecord {
-	record.Invalid401 = record.Unavailable || intValue(record.APIStatusCode) == http.StatusUnauthorized
-	record.QuotaLimited = !record.Invalid401 && intValue(record.APIStatusCode) == http.StatusOK && boolValue(record.LimitReached)
+	usageLimitReached := record.ProbeErrorKind == "usage_limit_reached"
+	record.Invalid401 = record.Unavailable || (intValue(record.APIStatusCode) == http.StatusUnauthorized && !usageLimitReached)
+	record.QuotaLimited = !record.Invalid401 && ((intValue(record.APIStatusCode) == http.StatusOK && boolValue(record.LimitReached)) || usageLimitReached)
 	record.Recovered = !record.Invalid401 &&
 		!record.QuotaLimited &&
 		record.Disabled &&
@@ -573,6 +580,29 @@ func classifyAccountState(record AccountRecord) AccountRecord {
 
 	record.UpdatedAt = nowISO()
 	return record
+}
+
+func applyUsageLimitDetails(record *AccountRecord, payload map[string]any) {
+	if record == nil {
+		return
+	}
+	errorPayload, ok := payload["error"].(map[string]any)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(stringValue(errorPayload["type"])) != "usage_limit_reached" {
+		return
+	}
+
+	record.ProbeErrorKind = "usage_limit_reached"
+	if message := strings.TrimSpace(stringValue(errorPayload["message"])); message != "" {
+		record.ProbeErrorText = message
+	}
+	if planType := strings.TrimSpace(stringValue(errorPayload["plan_type"])); planType != "" {
+		record.PlanType = planType
+	}
+	record.Allowed = boolPtr(false)
+	record.LimitReached = boolPtr(true)
 }
 
 func extractChatGPTAccountID(item map[string]any) string {

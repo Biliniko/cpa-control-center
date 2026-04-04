@@ -85,6 +85,11 @@ func (f *fakeCPAServer) handler(w http.ResponseWriter, r *http.Request) {
 		switch body.AuthIndex {
 		case "invalid":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status_code": 401, "body": ""})
+		case "quota401":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 401,
+				"body":        `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"free","resets_at":1775549913,"resets_in_seconds":602639}}`,
+			})
 		case "quota":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status_code": 200,
@@ -574,6 +579,84 @@ func TestRunScanPersistsQuotaSnapshotWithoutExtraUsageRequests(t *testing.T) {
 	}
 }
 
+func TestRunScanPersistsUsageLimit401QuotaSnapshotAsRecognizedResult(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "quota-free-scan.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "quota401",
+				"id_token":   `{"chatgpt_account_id":"acct-free-scan","plan_type":"free"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:              server.URL,
+		ManagementToken:      "token",
+		Locale:               localeEnglish,
+		TargetType:           "codex",
+		ProbeWorkers:         4,
+		ActionWorkers:        2,
+		QuotaWorkers:         3,
+		TimeoutSeconds:       5,
+		Retries:              0,
+		UserAgent:            defaultUserAgent,
+		QuotaAction:          "disable",
+		QuotaCheckFree:       true,
+		QuotaFreeMaxAccounts: 100,
+		ExportDirectory:      filepath.Join(dataDir, "exports"),
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	summary, err := service.RunScan()
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if summary.ProbedAccounts != 1 || summary.QuotaLimitedCount != 1 {
+		t.Fatalf("unexpected scan summary: %+v", summary)
+	}
+
+	snapshot, ok, err := service.store.LoadCodexQuotaSnapshot()
+	if err != nil {
+		t.Fatalf("LoadCodexQuotaSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected scan to persist a quota snapshot")
+	}
+	if snapshot.TotalAccounts != 1 || snapshot.SuccessfulAccounts != 1 || snapshot.FailedAccounts != 0 {
+		t.Fatalf("expected usage-limit probe to stay out of failed quota results: %+v", snapshot)
+	}
+	if len(snapshot.Accounts) != 1 {
+		t.Fatalf("expected one quota account detail, got %d", len(snapshot.Accounts))
+	}
+	if !snapshot.Accounts[0].Success || snapshot.Accounts[0].Error == "" {
+		t.Fatalf("expected recognized usage-limit account detail to keep its explanation, got %+v", snapshot.Accounts[0])
+	}
+	if snapshot.Accounts[0].PlanType != "free" || !snapshot.Accounts[0].Weekly.Supported || !snapshot.Accounts[0].CodeReviewWeekly.Supported {
+		t.Fatalf("unexpected usage-limit quota detail: %+v", snapshot.Accounts[0])
+	}
+
+	serverState.mu.Lock()
+	apiCalls := serverState.apiCalls
+	serverState.mu.Unlock()
+	if apiCalls != 1 {
+		t.Fatalf("expected exactly one usage request during scan, got %d", apiCalls)
+	}
+}
+
 func TestParseQuotaBucketResultDoesNotUseFiveHourResetForWeekly(t *testing.T) {
 	payload := map[string]any{
 		"rate_limits": map[string]any{
@@ -922,6 +1005,81 @@ func TestBackendRunScanMaintainAndExport(t *testing.T) {
 	}
 	if len(serverState.reenabled) != 1 || serverState.reenabled[0] != "recovered-codex.json" {
 		t.Fatalf("unexpected reenabled names: %+v", serverState.reenabled)
+	}
+}
+
+func TestBackendMaintainDisablesUsageLimit401Accounts(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":       "quota-free.json",
+				"type":       "codex",
+				"provider":   "codex",
+				"auth_index": "quota401",
+				"id_token":   `{"chatgpt_account_id":"acct-free","plan_type":"free"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		Delete401:       true,
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	result, err := service.RunMaintain(MaintainOptions{
+		Delete401:   true,
+		QuotaAction: "disable",
+	})
+	if err != nil {
+		t.Fatalf("RunMaintain: %v", err)
+	}
+	if len(result.Delete401Results) != 0 {
+		t.Fatalf("usage-limit account should not be deleted as invalid_401: %+v", result)
+	}
+	if len(result.QuotaActionResults) != 1 || !result.QuotaActionResults[0].OK {
+		t.Fatalf("expected quota action to disable account, got %+v", result)
+	}
+
+	records, err := service.ListAccounts(AccountFilter{Type: "codex"})
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one record, got %d", len(records))
+	}
+	if records[0].StateKey != stateQuotaLimited || !records[0].Disabled {
+		t.Fatalf("expected disabled quota-limited record, got %+v", records[0])
+	}
+
+	serverState.mu.Lock()
+	defer serverState.mu.Unlock()
+	if len(serverState.deleted) != 0 {
+		t.Fatalf("expected no deletes, got %+v", serverState.deleted)
+	}
+	if len(serverState.disabled) != 1 || serverState.disabled[0] != "quota-free.json" {
+		t.Fatalf("expected quota-free.json to be disabled, got %+v", serverState.disabled)
 	}
 }
 

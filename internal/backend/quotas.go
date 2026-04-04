@@ -320,6 +320,10 @@ func quotaOutcomeFromUsageProbe(probe UsageProbeResult) quotaFetchOutcome {
 		record:   probe.Record,
 		planType: normalizeQuotaPlanType(probe.Record.PlanType),
 	}
+	if probe.Record.ProbeErrorKind == "usage_limit_reached" {
+		outcome.usagePlanType = normalizeQuotaPlanType(probe.Record.PlanType)
+		return outcome
+	}
 	if probe.UsageError != nil {
 		outcome.err = probe.UsageError
 		return outcome
@@ -610,6 +614,9 @@ func buildQuotaAccountDetail(outcome quotaFetchOutcome, fetchedAt string) CodexQ
 	if outcome.err != nil {
 		detail.Error = outcome.err.Error()
 		return detail
+	}
+	if outcome.record.ProbeErrorKind == "usage_limit_reached" {
+		detail.Error = strings.TrimSpace(outcome.record.ProbeErrorText)
 	}
 	detail.FiveHour = quotaBucketDetail(planType, quotaBucketFiveHour, outcome.result.fiveHour)
 	detail.Weekly = quotaBucketDetail(planType, quotaBucketWeekly, outcome.result.weekly)

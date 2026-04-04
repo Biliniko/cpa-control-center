@@ -119,8 +119,8 @@ function fetchedAtLabel() {
               </span>
             </div>
 
-            <div v-if="!account.success" class="quota-detail-modal__error">
-              <strong>{{ t('quotas.matrix.failureReason') }}</strong>
+            <div v-if="account.error" class="quota-detail-modal__error" :class="{ 'quota-detail-modal__error--note': account.success }">
+              <strong>{{ account.success ? t('accounts.columns.state') : t('quotas.matrix.failureReason') }}</strong>
               <p>{{ account.error || t('common.notAvailable') }}</p>
             </div>
 

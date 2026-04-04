@@ -2654,6 +2654,20 @@ select {
   padding-top: 0.15rem;
 }
 
+.quota-card__note {
+  padding-top: 0.18rem;
+}
+
+.quota-card__note small {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 0.68rem;
+  color: rgba(241, 206, 142, 0.88);
+  line-height: 1.35;
+}
+
 .quota-card__reset {
   font-size: 0.66rem;
   color: rgba(201, 193, 179, 0.6);
@@ -2991,6 +3005,16 @@ select {
 .quota-detail-modal__error p {
   margin-top: 0.28rem;
   color: rgba(255, 196, 180, 0.88);
+}
+
+.quota-detail-modal__error--note {
+  border-color: rgba(214, 176, 96, 0.28);
+  background:
+    linear-gradient(180deg, rgba(84, 58, 18, 0.68), rgba(55, 38, 14, 0.68));
+}
+
+.quota-detail-modal__error--note p {
+  color: rgba(247, 224, 177, 0.9);
 }
 
 .quota-detail-modal__buckets {

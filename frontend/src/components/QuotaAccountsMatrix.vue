@@ -160,6 +160,9 @@ watch(() => props.accounts.length, () => {
             <div class="quota-card__footer">
               <small class="quota-card__reset">{{ account.earliestResetAt ? formatResetCompact(account.earliestResetAt) : t('common.notAvailable') }}</small>
             </div>
+            <div v-if="account.error" class="quota-card__note">
+              <small>{{ account.error }}</small>
+            </div>
           </template>
           <template v-else>
             <div class="quota-card__error">
