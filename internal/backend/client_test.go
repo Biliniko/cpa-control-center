@@ -476,3 +476,116 @@ func TestClientProbeTreatsUsageLimit401AsQuotaLimited(t *testing.T) {
 		t.Fatalf("expected 1 probe attempt, got %d", hits)
 	}
 }
+
+func TestClientProbeTreatsUsageLimit401AsQuotaLimitedWhenInventoryMarkedUnavailable(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			atomic.AddInt32(&hits, 1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 401,
+				"body": `{
+					"error": {
+						"type": "usage_limit_reached",
+						"message": "The usage limit has been reached",
+						"plan_type": "team",
+						"resets_at": 1775672643,
+						"resets_in_seconds": 16687
+					}
+				}`,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	client.retryDelay = 0
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TimeoutSeconds:  5,
+		Retries:         3,
+		UserAgent:       defaultUserAgent,
+	}
+
+	record := AccountRecord{
+		Name:             "quota-team.json",
+		AuthIndex:        "quota-team",
+		Type:             "codex",
+		Provider:         "codex",
+		ChatGPTAccountID: "acct-team",
+		Unavailable:      true,
+	}
+
+	probed := client.ProbeUsage(context.Background(), settings, record)
+	if probed.StateKey != stateQuotaLimited {
+		t.Fatalf("expected quota_limited state, got %+v", probed)
+	}
+	if probed.Invalid401 {
+		t.Fatalf("usage_limit_reached should override stale unavailable/invalid_401 flags: %+v", probed)
+	}
+	if probed.PlanType != "team" {
+		t.Fatalf("expected team plan type from usage-limit payload, got %+v", probed)
+	}
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("expected 1 probe attempt, got %d", hits)
+	}
+}
+
+func TestClientProbeTreatsDoubleEncodedUsageLimit401AsQuotaLimited(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			atomic.AddInt32(&hits, 1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 401,
+				"body":        `"{\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"The usage limit has been reached\",\"plan_type\":\"team\",\"resets_at\":1775672643,\"resets_in_seconds\":16687}}"`,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	client.retryDelay = 0
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TimeoutSeconds:  5,
+		Retries:         3,
+		UserAgent:       defaultUserAgent,
+	}
+
+	record := AccountRecord{
+		Name:             "quota-team-double.json",
+		AuthIndex:        "quota-team-double",
+		Type:             "codex",
+		Provider:         "codex",
+		ChatGPTAccountID: "acct-team-double",
+	}
+
+	probed := client.ProbeUsage(context.Background(), settings, record)
+	if probed.StateKey != stateQuotaLimited {
+		t.Fatalf("expected quota_limited state from double-encoded body, got %+v", probed)
+	}
+	if probed.Invalid401 {
+		t.Fatalf("double-encoded usage_limit_reached should not be marked invalid_401: %+v", probed)
+	}
+	if probed.PlanType != "team" {
+		t.Fatalf("expected team plan type from double-encoded payload, got %+v", probed)
+	}
+	if atomic.LoadInt32(&hits) != 1 {
+		t.Fatalf("expected 1 probe attempt, got %d", hits)
+	}
+}

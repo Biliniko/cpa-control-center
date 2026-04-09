@@ -243,6 +243,7 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 	}
 
 	rawBody := body["body"]
+	applyUsageLimitDetails(&result.Record, rawBody)
 	parsedBody, err := toJSONObject(settings.Locale, rawBody)
 	if err != nil && statusCode != http.StatusUnauthorized {
 		result.Record.ProbeErrorKind = "body_invalid_json"
@@ -251,7 +252,6 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 		result.UsageError = err
 		return result
 	}
-
 	applyUsageLimitDetails(&result.Record, parsedBody)
 
 	if statusCode == http.StatusUnauthorized {
@@ -550,7 +550,12 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 
 func classifyAccountState(record AccountRecord) AccountRecord {
 	usageLimitReached := record.ProbeErrorKind == "usage_limit_reached"
-	record.Invalid401 = record.Unavailable || (intValue(record.APIStatusCode) == http.StatusUnauthorized && !usageLimitReached)
+	hasLiveProbeSignal := record.APIStatusCode != nil ||
+		record.Allowed != nil ||
+		record.LimitReached != nil ||
+		record.ProbeErrorKind != ""
+	inventoryUnavailable := record.Unavailable && !hasLiveProbeSignal
+	record.Invalid401 = inventoryUnavailable || (intValue(record.APIStatusCode) == http.StatusUnauthorized && !usageLimitReached)
 	record.QuotaLimited = !record.Invalid401 && ((intValue(record.APIStatusCode) == http.StatusOK && boolValue(record.LimitReached)) || usageLimitReached)
 	record.Recovered = !record.Invalid401 &&
 		!record.QuotaLimited &&
@@ -582,18 +587,14 @@ func classifyAccountState(record AccountRecord) AccountRecord {
 	return record
 }
 
-func applyUsageLimitDetails(record *AccountRecord, payload map[string]any) {
+func applyUsageLimitDetails(record *AccountRecord, payload any) {
 	if record == nil {
 		return
 	}
-	errorPayload, ok := payload["error"].(map[string]any)
-	if !ok {
+	errorPayload := findUsageLimitErrorPayload(payload)
+	if len(errorPayload) == 0 {
 		return
 	}
-	if strings.TrimSpace(stringValue(errorPayload["type"])) != "usage_limit_reached" {
-		return
-	}
-
 	record.ProbeErrorKind = "usage_limit_reached"
 	if message := strings.TrimSpace(stringValue(errorPayload["message"])); message != "" {
 		record.ProbeErrorText = message
@@ -603,6 +604,40 @@ func applyUsageLimitDetails(record *AccountRecord, payload map[string]any) {
 	}
 	record.Allowed = boolPtr(false)
 	record.LimitReached = boolPtr(true)
+}
+
+func findUsageLimitErrorPayload(payload any) map[string]any {
+	switch typed := payload.(type) {
+	case map[string]any:
+		if strings.EqualFold(strings.TrimSpace(stringValue(typed["type"])), "usage_limit_reached") {
+			return typed
+		}
+		if nested, ok := typed["error"]; ok {
+			if found := findUsageLimitErrorPayload(nested); len(found) > 0 {
+				return found
+			}
+		}
+		if nested, ok := typed["body"]; ok {
+			if found := findUsageLimitErrorPayload(nested); len(found) > 0 {
+				return found
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if found := findUsageLimitErrorPayload(item); len(found) > 0 {
+				return found
+			}
+		}
+	case string:
+		if strings.TrimSpace(typed) == "" {
+			return nil
+		}
+		var parsed any
+		if err := json.Unmarshal([]byte(typed), &parsed); err == nil {
+			return findUsageLimitErrorPayload(parsed)
+		}
+	}
+	return nil
 }
 
 func extractChatGPTAccountID(item map[string]any) string {

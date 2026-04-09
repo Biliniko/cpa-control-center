@@ -657,6 +657,83 @@ func TestRunScanPersistsUsageLimit401QuotaSnapshotAsRecognizedResult(t *testing.
 	}
 }
 
+func TestRunScanTreatsUsageLimit401AsQuotaLimitedWhenInventoryMarkedUnavailable(t *testing.T) {
+	serverState := &fakeCPAServer{
+		files: []map[string]any{
+			{
+				"name":        "quota-free-unavailable-scan.json",
+				"type":        "codex",
+				"provider":    "codex",
+				"auth_index":  "quota401",
+				"unavailable": true,
+				"id_token":    `{"chatgpt_account_id":"acct-free-unavailable-scan","plan_type":"free"}`,
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(serverState.handler))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	if _, err := service.SaveSettings(AppSettings{
+		BaseURL:              server.URL,
+		ManagementToken:      "token",
+		Locale:               localeEnglish,
+		TargetType:           "codex",
+		ProbeWorkers:         4,
+		ActionWorkers:        2,
+		QuotaWorkers:         3,
+		TimeoutSeconds:       5,
+		Retries:              0,
+		UserAgent:            defaultUserAgent,
+		QuotaAction:          "disable",
+		QuotaCheckFree:       true,
+		QuotaFreeMaxAccounts: 100,
+		ExportDirectory:      filepath.Join(dataDir, "exports"),
+	}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	summary, err := service.RunScan()
+	if err != nil {
+		t.Fatalf("RunScan: %v", err)
+	}
+	if summary.ProbedAccounts != 1 || summary.QuotaLimitedCount != 1 || summary.Invalid401Count != 0 {
+		t.Fatalf("unexpected scan summary: %+v", summary)
+	}
+
+	records, err := service.ListAccounts(AccountFilter{Type: "codex"})
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one scanned record, got %d", len(records))
+	}
+	if records[0].StateKey != stateQuotaLimited || records[0].Invalid401 {
+		t.Fatalf("expected unavailable usage-limit record to stay quota_limited, got %+v", records[0])
+	}
+
+	snapshot, ok, err := service.store.LoadCodexQuotaSnapshot()
+	if err != nil {
+		t.Fatalf("LoadCodexQuotaSnapshot: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected scan to persist a quota snapshot")
+	}
+	if snapshot.TotalAccounts != 1 || snapshot.SuccessfulAccounts != 1 || snapshot.FailedAccounts != 0 {
+		t.Fatalf("expected usage-limit probe to stay out of failed quota results: %+v", snapshot)
+	}
+	if len(snapshot.Accounts) != 1 || !snapshot.Accounts[0].Success || snapshot.Accounts[0].PlanType != "free" {
+		t.Fatalf("unexpected usage-limit quota detail: %+v", snapshot.Accounts)
+	}
+}
+
 func TestParseQuotaBucketResultDoesNotUseFiveHourResetForWeekly(t *testing.T) {
 	payload := map[string]any{
 		"rate_limits": map[string]any{
