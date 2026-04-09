@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## v1.5.2
+
+### Highlights
+
+- Fixed Codex usage-limit `401` responses so quota-limited accounts are no longer misclassified as `401 Invalid` during scan and quota maintenance flows.
+- Hardened usage-limit detection to handle stale inventory flags such as `unavailable=true` and malformed or double-encoded upstream error payloads.
+- Restored the native-style draggable title bar behavior on macOS to better match platform window conventions.
+
+### Notes
+
+- Quota-limited accounts are now routed more reliably through quota handling instead of delete-401 cleanup paths.
+- Added regression coverage for usage-limit classification across both client-level parsing and full scan behavior.
+
 ## v1.5.1
 
 ### Highlights
